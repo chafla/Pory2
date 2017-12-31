@@ -10,5 +10,4 @@ create a new bot, I'll *also* advise you to **not** use ! as a prefix. When I cr
 but now it's likely you're going to conflict with at least something.
 
 Just as a little note, This repository represents most of Porygon2's current codebase, but does make some omissions and
-probably isn't up-to-date with the current version. I'll make an effort to keep it up to date-ish but can't really make
-any guarantees.
+probably isn't up-to-date with the current (private) version. I'll make an effort to keep it up to date-ish.
