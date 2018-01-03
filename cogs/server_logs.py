@@ -20,6 +20,7 @@ colors = {
     "edit": discord.Color.gold(),
     "mention_mods": discord.Color.green(),
     "name_change": discord.Color.purple(),
+    "nickname_change": discord.Color.blurple(),
     "verified": discord.Color.light_grey()
 }
 
@@ -41,18 +42,61 @@ class ServerLogs:
     def __init__(self, bot):
         self.bot = bot
         self.config = bot.config
+        self._config_cache = {}
+
+        for key in self.config.scan_iter("config:mod:config*"):
+            *_, guild_id = key.split(":")
+            self._config_cache[int(guild_id)] = self.config.hgetall(key)
 
     @property
-    def guild(self):
-        return self.bot.get_guild(111504456838819840)
+    def active_guilds(self):
+        return self._config_cache.keys()
 
-    @property
-    def general_modlog(self):
-        return self.bot.get_channel(250333879368548352)
+    def get_guild_config(self, guild_id):
+        """
+        Get the guild's config, or create it if it doesn't exist.
 
-    @property
-    def priority_modlog(self):
-        return self.bot.get_channel(268259704906448896)
+        Expected format should be:
+        {
+            "priority_modlog": "id",
+            "default_modlog": "id",
+        }
+
+        either modlog can be `None`, which just results in the event being discarded.
+        :param guild_id: The tracked guild's ID
+        :return: guild config dict, or None if it doesn't exist
+        """
+        assert isinstance(guild_id, (str, int))
+
+        try:
+            return self._config_cache[int(guild_id)]
+        except KeyError:
+            # Let's just build it up anyway
+            return self.config.hgetall("config:mod:config:{}".format(guild_id))
+
+    def _create_guild_config(self, guild_id):
+        guild_config = {
+            "priority_modlog": None,
+            "default_modlog": None,
+            "tracked_guild": None
+        }
+
+        self.config.hmset("config:mod:config:{}".format(guild_id), guild_config)
+        self._config_cache[int(guild_id)] = guild_config
+        return guild_config
+
+    def _is_tracked(self, guild, priority_event=False):
+        """Perform a simple check before running each event so that we don't waste time trying to log"""
+        if guild is None:  # DMs
+            return False
+        elif guild.id not in self._config_cache.keys():
+            return False
+        elif priority_event and self._config_cache[guild.id]["priority_modlog"] is None:
+            return False
+        elif not priority_event and self._config_cache[guild.id]["default_modlog"] is None:
+            return False
+        else:
+            return True
 
     def add_case_number(self, embed):
         """Update the embed with the active case number, and write it out."""
@@ -62,11 +106,15 @@ class ServerLogs:
         embed.add_field(name="Case", value=str(case_id))
         return embed
 
-    async def send_embed(self, embed, priority=False, **kwargs):
+    async def send_embed_to_modlog(self, embed, guild_id, priority=False, **kwargs):
         """Have to use this backwards-ass method because it throws http exceptions."""
-        dest_channel = self.general_modlog if not priority else self.priority_modlog
+        assert isinstance(guild_id, (int, str))  # So we don't accidentally pass in a Guild object
+
+        guild_config = self.get_guild_config(guild_id)
+        dest_channel_id = int(guild_config["default_modlog"] if not priority else guild_config["priority_modlog"])
+
         try:
-            await dest_channel.send(embed=embed, **kwargs)
+            await self.bot.get_channel(dest_channel_id).send(embed=embed, **kwargs)
         except discord.HTTPException:
             # Silently swallow the error
             log.exception("Exception occurred when sending embed.\nParams:\n{}".format(embed.fields))
@@ -79,8 +127,8 @@ class ServerLogs:
         embed.set_footer(text=get_timestamp())
         return embed
 
-    async def _get_last_audit_action(self, action, member):
-        async for log_entry in self.guild.audit_logs(action=action, limit=10):
+    async def _get_last_audit_action(self, guild_id, action, member):
+        async for log_entry in self.bot.get_guild(guild_id).audit_logs(action=action, limit=10):
             if log_entry.target.id == member.id:
                 # Let's stop at the first entry.
                 mod_responsible = log_entry.user
@@ -112,11 +160,12 @@ class ServerLogs:
         for name, value in kwargs.items():
             embed.add_field(name=name, value=value)
 
-        await self.send_embed(embed, priority=priority)
+        await self.send_embed_to_modlog(embed, ctx.guild, priority=priority)
 
     async def on_member_ban(self, guild, user):
-        if guild.id == self.guild.id:
-            await self.priority_modlog.send("Member {} was banned".format(user.name))  # temporary failsafe
+        if self._is_tracked(guild, priority_event=True):
+            priority_modlog = self.bot.get_channel(self._config_cache[guild.id]["priority_modlog"])
+            await priority_modlog.send("Member {} was banned".format(user.name))  # temporary failsafe
 
             embed = discord.Embed(title="User {} was banned.".format(str(user)),
                                   color=colors["ban"])
@@ -124,31 +173,31 @@ class ServerLogs:
             embed = self.format_embed(embed, user)
             embed = self.add_case_number(embed)
 
-            mod_responsible, reason = await self._get_last_audit_action(discord.AuditLogAction.ban, user)
+            mod_responsible, reason = await self._get_last_audit_action(discord.AuditLogAction.ban, guild.id, user)
 
             # Add reason
 
             embed.add_field(name="Reason", value=reason if reason else "None given.")
             embed.add_field(name="Mod responsible", value=mod_responsible if mod_responsible else "unknown")
 
-            await self.send_embed(embed, priority=True)
+            await self.send_embed_to_modlog(embed, guild.id, priority=True)
 
     async def on_member_unban(self, guild, user):
-        if guild.id == self.guild.id:
+        if self._is_tracked(guild, priority_event=True):
             embed = discord.Embed(title="User {0.name}#{0.discriminator} was unbanned.".format(user))
 
             embed = self.format_embed(embed, user)
             embed = self.add_case_number(embed)
 
-            mod_responsible, reason = await self._get_last_audit_action(discord.AuditLogAction.unban, user)
+            mod_responsible, reason = await self._get_last_audit_action(discord.AuditLogAction.unban, guild.id, user)
 
             embed.add_field(name="Reason", value=reason if reason else "None given.")
             embed.add_field(name="Mod responsible", value=mod_responsible.name if mod_responsible else "unknown")
 
-            await self.send_embed(embed, priority=True)
+            await self.send_embed_to_modlog(embed, guild.id, priority=True)
 
     async def on_member_join(self, member):
-        if member.guild == self.guild:
+        if self._is_tracked(member.guild):
             embed = discord.Embed(title="User {0.name}#{0.discriminator} joined.".format(member),
                                   color=colors["join"])
 
@@ -156,10 +205,10 @@ class ServerLogs:
 
             embed.add_field(name="Account created", value=member.created_at)
 
-            await self.send_embed(embed)
+            await self.send_embed_to_modlog(embed, member.guild.id)
 
     async def on_member_remove(self, member):
-        if member.guild == self.guild:
+        if self._is_tracked(member.guild):
 
             # We need to check to see if it was a ban, which also triggers the member_remove handle
 
@@ -169,7 +218,7 @@ class ServerLogs:
 
             # Check to see if the leave was a kick or just a regular leave
 
-            for log_entry in await self.guild.audit_logs(action=discord.AuditLogAction.kick, limit=1).flatten():
+            for log_entry in await member.guild.audit_logs(action=discord.AuditLogAction.kick, limit=1).flatten():
                 # Let's stop at the first entry.
                 if log_entry.target.id == member.id:  # The leave was a kick
                     leave_was_kick = True
@@ -191,10 +240,10 @@ class ServerLogs:
 
             embed = self.format_embed(embed, member)
 
-            await self.send_embed(embed, priority=leave_was_kick)
+            await self.send_embed_to_modlog(embed, member.guild, priority=leave_was_kick)
 
     async def on_message_delete(self, message):
-        if message.guild == self.guild:
+        if self._is_tracked(message.guild):
             reupload = None
             member = message.author
             embed = discord.Embed(title="Message by {0.name}#{0.discriminator} deleted.".format(member),
@@ -226,11 +275,11 @@ class ServerLogs:
                     log.exception("Encountered exception when downloading attachment.")
                     reupload = None
 
-            await self.send_embed(embed, file=reupload)
+            await self.send_embed_to_modlog(embed, message.guild.id, file=reupload)
 
     async def on_message_edit(self, before, after):
-        if before.guild == self.guild and before.content != after.content and not isinstance(before.channel,
-                                                                                             discord.DMChannel):
+        if self._is_tracked(before.guild) and before.content != after.content and not isinstance(before.channel,
+                                                                                                 discord.DMChannel):
             member = before.author
             embed = discord.Embed(title="Message by {0.name}#{0.discriminator} edited.".format(member),
                                   color=colors["edit"])
@@ -240,24 +289,57 @@ class ServerLogs:
             embed.add_field(name="Before", value=before.content, inline=False)
             embed.add_field(name="After", value=after.content)
 
-            await self.send_embed(embed)
+            await self.send_embed_to_modlog(embed, before.guild.id)
 
     async def on_member_update(self, before, after):
-        if before.guild == self.guild:
+        if self._is_tracked(before.guild):
             if before.name != after.name:
                 embed = discord.Embed(title="Member {0.name} changed their name to {1.name}.".format(before, after),
                                       color=colors["name_change"])
 
                 embed = self.format_embed(embed, after)
 
-                await self.send_embed(embed)
+                await self.send_embed_to_modlog(embed, before.guild.id)
             if before.roles != after.roles:
                 if discord.utils.get(before.roles, name="Verified") is None and \
                         discord.utils.get(after.roles, name="Verified") is not None:
                     embed = discord.Embed(title="Member {0.name} verified themselves.".format(before),
                                           color=colors["verified"])
                     embed = self.format_embed(embed, after)
-                    await self.send_embed(embed)
+                    await self.send_embed_to_modlog(embed, before.guild.id)
+            if before.nick != after.nick:
+                if after.nick is None:
+                    embed = discord.Embed(title="Member {} reset their nickname.".format(before),
+                                          color=colors["nickname_change"])
+                else:
+                    embed = discord.Embed(title="Member {0} changed their nickname to {1.name}.".format(before, after),
+                                          color=colors["nickname_change"])
+
+                embed = self.format_embed(embed, after)
+                await self.send_embed_to_modlog(embed, after.guild.id)
+
+    @checks.sudo()
+    @commands.command()
+    async def register_modlog(self, ctx, level: str, guild_id: int=None):
+        """Set the current channel to be the active modlog."""
+        if level.lower() not in ["default", "priority"]:
+            raise commands.BadArgument("Did you mean 'priority' or 'default'?")
+
+        if guild_id is None:
+            guild_id = ctx.guild.id
+
+        config = self.get_guild_config(ctx.message.guild.id)
+        config["{}_modlog".format(level.lower())] = ctx.message.channel.id
+        self.config.hmset("config:mod:config:{}".format(guild_id), config)
+        self._config_cache[guild_id] = config
+        await ctx.send("\N{OK HAND SIGN}")
+
+    @checks.sudo()
+    @commands.command()
+    async def enable_modlog_tracking(self, ctx):
+        """Activate tracking in the server this is called in"""
+        self._create_guild_config(ctx.message.guild.id)
+        await ctx.send("\N{OK HAND SIGN}")
 
     @checks.is_pokemon_mod()
     @commands.command(hidden=True, pass_context=True)
@@ -314,7 +396,7 @@ class ServerLogs:
             # Check the past messages for one that matches the case number
             if msg is None:
                 async for message in ctx.message.channel.history(limit=500):
-                    if message.author.id == self.bot.user.id and message.embeds != []:
+                    if message.author.id == self.bot.user.id and message.embeds:
                         if discord.utils.get(message.embeds[0].fields, case=str(message_id)):
                             msg = message
 
@@ -345,7 +427,7 @@ class ServerLogs:
             embed = self.format_embed(embed, message.author)
             embed.add_field(name="Channel", value=message.channel.name)
 
-            await self.send_embed(embed)
+            await self.send_embed_to_modlog(embed, message.guild)
 
 
 def setup(bot):
