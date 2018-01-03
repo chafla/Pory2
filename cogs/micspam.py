@@ -6,6 +6,7 @@ import discord
 from discord.ext import commands
 from .utils import checks
 from sys import stderr
+from .utils.utils import check_ids
 
 
 log = logging.getLogger()
@@ -15,7 +16,6 @@ class Micspam:
 
     def __init__(self, bot):
         self.bot = bot
-        self.voice_client = None
 
     @staticmethod
     def get_micspam(clip_chosen, song_list):
@@ -24,9 +24,14 @@ class Micspam:
         except IndexError:
             return None
 
-    def micspam_after(self, voice_client):
+    def micspam_after(self, voice_client, err):
         coro = voice_client.disconnect()
         fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+
+        if err is not None:
+            print("Error occured in future")
+            print('{0.__class__.__name__}: {0}'.format(err), file=stderr)
+
         try:
             fut.result()
         except Exception as e:
@@ -34,50 +39,49 @@ class Micspam:
             print("Error occured in future")
             print('{0.__class__.__name__}: {0}'.format(e), file=stderr)
 
-    async def play_micspam(self, channel_name, song_id, ctx):
+    async def _connect_cleanly(self, voice_channel):
+        current_connection = discord.utils.find(lambda c: c.channel == voice_channel or c.channel.guild == voice_channel.guild,
+                                                self.bot.voice_clients)
+        if current_connection is not None:
+            current_connection.disconnect()
+        return await voice_channel.connect()
+
+    async def play_micspam(self, channel, song_id, ctx):
         """Formerly are_you_capping()"""
-        if hasattr(self.bot, "voice"):
-            self.bot.voice.disconnect()
-        message = ctx.message
-        dest_channel = channel_name
         clip_chosen = song_id
+        voice_client = None
 
         meme_list = glob.glob("micspam/*.*")
 
-        try:
+        if hasattr(ctx.author, "voice") and ctx.author.voice is not None:
+            voice_client = await self._connect_cleanly(ctx.author.voice.channel)
+        elif check_ids(str(channel)):
+            chan = self.bot.get_channel(int(channel))
+            voice_client = await self._connect_cleanly(chan)
+        else:
             try:
-                voice_channel = self.bot.get_channel(channel_name)
-                await self.bot.join_voice_channel(voice_channel)
-            except discord.errors.InvalidArgument:
                 for guild in self.bot.guilds:
                     if guild.id in [111504456838819840, 110373943822540800, 155800402514673664,
                                     78716585996455936, 78469422049665024]:
-                        bound_voice_channel = discord.utils.get(guild.channels, name=str(dest_channel))
-                        if bound_voice_channel is None:
+                        chan = discord.utils.get(guild.voice_channels, name=str(channel))
+                        if chan is None:
                             continue
-                        voice_channel = self.bot.get_channel(channel_name)
-                        voice_client = await self.bot.join_voice_channel(voice_channel)
-                        if voice_client is not None:
-                            log.info("Micspam bound successfully to {.name}".format(bound_voice_channel))
+                        else:
+                            voice_client = await self._connect_cleanly(chan)
+                            log.info("Micspam bound successfully to {.name}".format(voice_client.channel.name))
                             break
 
-        except Exception as e:
-            log.exception("Error in micspam")
-            await ctx.send("Couldn't find that channel or already connected")
-            return
+            except Exception as e:
+                log.exception("Error in micspam")
+                await ctx.send("Couldn't find that channel or already connected")
+                return
 
-        l = list(self.bot.voice_clients)
-
-        micspam = self.get_micspam(clip_chosen, meme_list)
-        if l is None:
-            await message.channel.send("Couldn't connect to the channel.")
-            return
-        elif micspam is not None:
-            voice_connection = l[0]
-            player = voice_connection.create_ffmpeg_player(micspam, after=lambda: self.micspam_after(voice_connection))
-            player.start()
+        micspam_path = self.get_micspam(clip_chosen, meme_list)
+        if micspam_path is not None:
+            audio_source = discord.FFmpegPCMAudio(micspam_path)
+            voice_client.play(audio_source, after=lambda err: self.micspam_after(voice_client, err))
         else:
-            await message.channel.send("That micspam value doesn't exist.")
+            await ctx.message.channel.send("That micspam value doesn't exist.")
             return
 
     @checks.sudo()
