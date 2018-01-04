@@ -5,8 +5,10 @@ import logging
 import discord
 from discord.ext import commands
 from .utils import checks
+from cogs.utils.audio import audio_utils
 from sys import stderr
-from .utils.utils import check_ids
+from .utils.utils import check_ids, check_urls
+from os import remove
 
 
 log = logging.getLogger()
@@ -16,6 +18,7 @@ class Micspam:
 
     def __init__(self, bot):
         self.bot = bot
+        self.downloader = audio_utils.Downloader()
 
     @staticmethod
     def get_micspam(clip_chosen, song_list):
@@ -24,9 +27,12 @@ class Micspam:
         except IndexError:
             return None
 
-    def micspam_after(self, voice_client, err):
+    def micspam_after(self, voice_client, err, song_path, song_downloaded=False):
         coro = voice_client.disconnect()
         fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+
+        if song_downloaded:
+            remove(song_path)
 
         if err is not None:
             print("Error occured in future")
@@ -40,16 +46,16 @@ class Micspam:
             print('{0.__class__.__name__}: {0}'.format(e), file=stderr)
 
     async def _connect_cleanly(self, voice_channel):
-        current_connection = discord.utils.find(lambda c: c.channel == voice_channel or c.channel.guild == voice_channel.guild,
+        current_connection = discord.utils.find(lambda c: c.channel.guild.id == voice_channel.guild.id,
                                                 self.bot.voice_clients)
         if current_connection is not None:
-            current_connection.disconnect()
+            await current_connection.disconnect()
         return await voice_channel.connect()
 
-    async def play_micspam(self, channel, song_id, ctx):
+    async def play_micspam(self, channel, clip_chosen, ctx):
         """Formerly are_you_capping()"""
-        clip_chosen = song_id
         voice_client = None
+        downloaded = False
 
         meme_list = glob.glob("micspam/*.*")
 
@@ -76,17 +82,25 @@ class Micspam:
                 await ctx.send("Couldn't find that channel or already connected")
                 return
 
-        micspam_path = self.get_micspam(clip_chosen, meme_list)
+        if check_urls(clip_chosen):
+            await self.downloader.download_audio_threaded(clip_chosen)
+            stats = await self.downloader.download_stats_threaded(clip_chosen)
+            micspam_path = stats["expected_filename"]
+            downloaded = True
+        else:
+            micspam_path = self.get_micspam(int(clip_chosen), meme_list)
+
         if micspam_path is not None:
             audio_source = discord.FFmpegPCMAudio(micspam_path)
-            voice_client.play(audio_source, after=lambda err: self.micspam_after(voice_client, err))
+            voice_client.play(audio_source, after=lambda err: self.micspam_after(voice_client, err, micspam_path,
+                                                                                 downloaded))
         else:
             await ctx.message.channel.send("That micspam value doesn't exist.")
             return
 
     @checks.sudo()
     @commands.command(hidden=True, pass_context=True, aliases=["spam"])
-    async def capp(self, ctx, file: int, *, channel_name: str):
+    async def capp(self, ctx, file: str, *, channel_name: str):
         """
         Micspam a certain channel
         :param ctx: Context
@@ -111,6 +125,16 @@ class Micspam:
             output_msg += "{0}: {1}\n".format(n, file)
 
         await ctx.send(output_msg)
+
+    async def kill_voice_connections(self):
+        for voice_obj in self.bot.voice_clients:
+            await voice_obj.disconnect()
+
+    def __unload(self):
+        if self.bot.voice_clients:
+            n = len(self.bot.voice_clients)
+            self.bot.loop.create_task(self.kill_voice_connections())
+            log.info("Terminated {} voice connection(s) on bot reload.".format(n))
 
 
 def setup(bot):
