@@ -14,7 +14,6 @@ Procedure should be like this:
     - Proceed to the next one.
 
 """
-from enum import Enum
 from cogs.utils.audio.audio_utils import Downloader
 import concurrent.futures
 import logging
@@ -36,25 +35,6 @@ base_ytdl_options = {
     "source_address": "0.0.0.0",
     "quiet": True
 }
-
-
-class PlayerStatus(Enum):
-    INACTIVE = 0
-    READY = 1
-    PROCESSING = 2
-    PLAYING = 3
-
-
-class Entry:
-
-    def __init__(self, song_url, data_dict, downloader: Downloader):
-        self._downloader = downloader
-        self._data = data_dict
-        self._status = None
-        self.path = data_dict["expected_filename"]
-
-    def _get_audio_future(self, url):
-        self._downloader.download_stats_threaded(url)
 
 
 class Playlist:
@@ -197,12 +177,3 @@ class Playlist:
             os.remove(self.active_song["expected_filename"])
 
         self.bot.loop.create_task(self.voice_client.disconnect())
-
-
-
-
-
-
-
-
-
