@@ -205,7 +205,8 @@ class Mod:
 
     @property
     def d_important(self):
-        return self.bot.get_channel(220209831200423936)
+        return self.bot.get_channel(395304906912825344)
+        # return self.bot.get_channel(220209831200423936)  # cd-2017important
         # return self.bot.get_channel(262993960035680256)  # Debug
 
     @property
