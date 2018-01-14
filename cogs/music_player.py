@@ -5,7 +5,7 @@ import logging
 import discord
 from discord.ext import commands
 import traceback
-from .utils.audio.playlist import Playlist
+from cogs.utils.audio.playlist import Playlist
 
 log = logging.getLogger()
 
@@ -21,7 +21,7 @@ class MusicPlayer:
         for voice_obj in self.bot.voice_clients:
             await voice_obj.disconnect()
 
-    def get_playlist(self, ctx):
+    def get_playlist(self, ctx) -> Playlist:
         """Shorthand for getting the current bound playlist."""
         return self.active_playlists.get(ctx.message.guild.id)
 
@@ -73,19 +73,24 @@ class MusicPlayer:
         elif self.saved_songs.get(url) is not None:
             saved_song = self.saved_songs.get(url)
             url = saved_song
-
-        for link in url.split(" | "):
-            try:
-                async with ctx.typing():
-                    info_dict, index = await playlist.add_to_queue(link, ctx)
-                if index == 0 and not playlist.is_playing:
-                    playlist.play_song()
-                    # TODO NOW PLAYING MESSAGE
+        try:
+            async with ctx.typing():
+                # Pull the track info first to check if it's a playlist or not
+                info_dict = await playlist.get_track_info(url)
+                if info_dict.get("_type") == "playlist":
+                    index = await playlist.queue_playlist(info_dict)
+                    await ctx.send("Playlist {} ({} items) queued successfully.".format(info_dict["title"],
+                                                                                        len(info_dict["entries"])))
                 else:
-                    await ctx.send("Successfully queued song.")
-            except Exception as e:
-                traceback.print_exc()
-                await ctx.send("Error when adding song: {}".format(type(e)))
+                    info_dict, index = await playlist.add_to_queue(url, ctx)
+            if index == 0 and not playlist.is_playing:
+                playlist.play_song()
+                # TODO NOW PLAYING MESSAGE
+            else:
+                await ctx.send("Successfully queued song.")
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send("Error when adding song: {}".format(type(e)))
 
     @checks.sudo()
     @mp.command(aliases=["skip"], hidden=True)
@@ -97,6 +102,13 @@ class MusicPlayer:
         # if player.is_playing():
         #     player.stop()
         await playlist.skip()
+
+    @checks.sudo()
+    @mp.command()
+    async def shuffle(self, ctx):
+        playlist = self.get_playlist(ctx)
+        playlist.shuffle()
+        await ctx.send("Playlist shuffled!")
 
     @mp.command()
     async def list(self, ctx):

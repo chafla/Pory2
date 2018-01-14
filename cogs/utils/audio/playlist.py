@@ -4,7 +4,8 @@ Playlist setup for the music player.
 Procedure should be like this:
     - Connect to voice channel, initializing a new playlist which is saved per vc.
     - Wait on further action.
-    - When a new song is queued up, create a new `Entry` object which contains the song info. Could even just be the dict.
+    - When a new song is queued up, create a new `Entry` object which contains the song info. Could even just be the
+        dict.
     - Fetch stats first for the entry. After, create a future object that is tracked as an instance variable. The player
         will wait for this to proceed before playing the next song.
         - If another song is queued up while the current one is queueing/playing; create the object, try to download it
@@ -20,6 +21,7 @@ import logging
 import os
 import discord
 import traceback
+from random import shuffle
 
 
 log = logging.getLogger()
@@ -33,7 +35,7 @@ base_ytdl_options = {
     "ignoreerrors": False,
     "no_warnings": True,
     "source_address": "0.0.0.0",
-    "quiet": True
+    # "quiet": True
 }
 
 
@@ -96,6 +98,10 @@ class Playlist:
 
         return info_future.result()  # Might be able to do something with this at this point, maybe emit an event
 
+    async def get_track_info(self, song_url):
+        info_future = self.executor.submit(self.downloader.download_stats, song_url)
+        return info_future.result()
+
     def _send_message(self, message_content):
         """Send a message to the bound text channel from a non-async context"""
         self.bot.loop.create_task(self.bound_text_channel.send(message_content))
@@ -105,7 +111,7 @@ class Playlist:
         """Most we are sure to get is url, title, and ID. Create a song repr that doesn't crash out."""
         ret = "**{}**".format(info_dict["title"])
         if info_dict.get("uploader"):
-            ret += "by {}\n".format(info_dict["uploader"])
+            ret += " by {}\n".format(info_dict["uploader"])
 
         if info_dict.get("requester"):
             ret += "\nrequested by {}".format(info_dict["requester"].mention)
@@ -113,7 +119,10 @@ class Playlist:
         # ret += "\n({})".format(info_dict["url"])
         return ret.format(info_dict)
 
-    async def add_to_queue(self, url, ctx=None):
+    def shuffle(self):
+        shuffle(self.live_queue)
+
+    async def add_to_queue(self, url, ctx=None, **extra_info_tags):
         # TODO add basic playlist support
         """
         Add a new song to the queue.
@@ -124,15 +133,42 @@ class Playlist:
         if ctx:
             info_dict["requester"] = ctx.message.author
 
+        if extra_info_tags:
+            info_dict = {**info_dict, **extra_info_tags}
+
         self.live_queue.append(info_dict)
         index = self.live_queue.index(info_dict)
 
-        if index == 0:
+        if index == 0 and self.active_song is None:
             # As soon as it pops up, set it to be active. This avoids any leftovers.
             self.active_song = self.live_queue.pop(0)
 
         # If the index is 0, then we'd play
         return info_dict, index
+
+    async def queue_playlist(self, playlist_info_dict, ctx=None):
+        # TODO Consider making this a generator function which just sits in the playlist and yields items
+        # Implement this to reduce the initial load time so we don't just kill off pory
+        first_index = 2e1000
+
+        for i, entry in enumerate(playlist_info_dict["entries"]):
+            # The downloaded_url is a little different
+            entry["expected_filename"] = self.downloader.client.prepare_filename(entry)
+            if ctx:
+                entry["requester"] = ctx.message.author
+
+            if i < 3:
+                await self._create_new_entry(entry["url"])  # Download the track
+            else:
+                entry["not_downloaded"] = True
+            # info_dict, index = await self.add_to_queue(entry["url"])
+            self.live_queue.append(entry)
+            index = self.live_queue.index(entry)
+            if i == 0 and self.active_song is None and index == 0:
+                first_index = index
+                self.active_song = self.live_queue.pop(0)
+
+        return first_index
 
     def after_song(self, err):
 
@@ -142,13 +178,12 @@ class Playlist:
 
         self._history_queue.append(self.active_song)
         try:
-            # We need to check to see if the last one was skipped because it seems that sometimes a skip will have
-            # already executed the after_song in its after
-            if not self._skipped_last:
-                self.active_song = self.live_queue.pop(0)
-            else:
-                self._skipped_last = False
-            # self.bot.loop.create_task(self.play_song())
+            self.active_song = self.live_queue.pop(0)
+
+            if self.active_song.get("not_downloaded"):
+                future = self.executor.submit(self.downloader.download_audio, self.active_song["url"])
+                concurrent.futures.wait([future], 30, return_when=concurrent.futures.FIRST_COMPLETED)
+                future.result()
             self.play_song()
         except IndexError:
             # It's empty: end of playlist
@@ -164,7 +199,7 @@ class Playlist:
 
     async def skip(self):
         self.voice_client.stop()  # automatically calling the after fn
-        self._skipped_last = True
+        # self._skipped_last = True
         self._send_message("Skipping.")
 
     def __del__(self):

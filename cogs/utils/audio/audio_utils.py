@@ -3,7 +3,6 @@ Some utilities for downloading/dealing with audio.
 """
 
 import youtube_dl
-from uuid import uuid4
 import concurrent.futures
 import logging
 
@@ -32,7 +31,7 @@ youtube_dl.utils.bug_reports_message = lambda: ''
 class Downloader:
 
     def __init__(self):
-        self.executor = concurrent.futures.ThreadPoolExecutor()
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         self.client = youtube_dl.YoutubeDL(base_ytdl_options)
 
     def download_audio(self, url):
