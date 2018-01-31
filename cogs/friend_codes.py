@@ -123,8 +123,8 @@ class FriendCodes:
         valid_games = ["Sun", "Moon", "Omega Ruby", "Alpha Sapphire", "X", "Y", "Ultra Sun", "Ultra Moon"]
 
         # Hack for user input
-        if self.game_name_substitutions.get(game) is not None:
-            game = self.game_name_substitutions[game]
+        if self.game_name_substitutions.get(game.lower()) is not None:
+            game = self.game_name_substitutions[game.lower()]
         elif game.lower() == "ultra":
             await ctx.send('Ultra Sun and Ultra Moon need to be surrounded with parentheses.\n'
                            'Try `"Ultra Sun"` or `"Ultra Moon"` instead.')
