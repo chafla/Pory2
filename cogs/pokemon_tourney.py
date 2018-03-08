@@ -1,7 +1,12 @@
 """A pokemon tourney for the mods, woo hoo"""
+import logging
 import discord
 from discord.ext import commands
+from redis import RedisError
+
 from .utils import checks, utils
+
+log = logging.getLogger()
 
 # TODO Add support for a hard mode that allows for a second challenge
 # TODO Add w/l support
@@ -12,20 +17,34 @@ You've been awarded {}'s badge! {}
 {}
 You can view your current badge collection by using `!league badge_case`."""
 
-flawless_victory_message = """
-**Congratulations, {0.mention}**
-You've fought hard and obtained a Flawless Victory! We can't we all be as awesome as you, {0.name}? 
-Enjoy the new ribbon commemorating this rare achievement! {1} 
+ribbon_get_message = """
+**Congratulations, {0.mention}!**
+%s
+You've been granted the {1}! {2}
 
-You can view your current badge collection by using `!league badge_case`.
+You can view your current badge collection by using `!league badge_case`
 """
+
+default_ribbon_desc = """
+You've been granted the {1}!
+"""
+
+new_medallion_piece_message = """
+**Congratulations, {}!**
+You've been awarded a piece of the {}! {}
+You now have {}/{} pieces of the medallion, putting you one step closer towards completing it. 
+Collect the rest by challenging moderators!
+"""
+
+medallion_complete_message = """
+**Congratulations, {}!**
+You've just collected **all** of the pieces of the {}! Putting them together, you now have a full medallion! {}
+Thank you for participating in the event, and enjoy your permanent medallion in your badge case!
+
+You can view your badge case by using `!league badge_case`."""
 
 
 class PokemonTourney:
-
-    # TODO
-    # Add badge info, retired leaders, medallions, etc. to config and add commands for them so that they can be
-    # updated without needing to hardcode everything
 
     # Emoji name for each badge.
     _badges = {
@@ -43,7 +62,9 @@ class PokemonTourney:
         265965616551297024: "clockoutBadge",        # RunTime256
         195404515711778817: "depthsBadge",          # AceFyre
         # 78716152653553664: "baneBadge",           # Luc (debugging)
-        227979061656289282: "flakeBadge"            # Monk
+        227979061656289282: "flakeBadge",           # Monk
+        292126215895252993: "fluxBadge",            # Bounty
+        145954290718998529: "pinnacleBadge"         # Surv
     }
 
     _ribbons = {
@@ -53,44 +74,13 @@ class PokemonTourney:
     }
 
     _champion_message = {
-        "League Champion": "\nYou've completed 8 Mod League Challenges and earned a role for your account along side a "
-                           "nifty **Champion's Ribbon**!! {}\n",
-        "Elite League Champion": "\nYou've completed all current Mod League Challenges and have earned an "
-                                 "**Elite Champion's Ribbon**!! {}\n",
-    }
-
-    _medallion_message = [
-        "",
-        """**Congratulations, {}!**
-You've been awarded **1/3** of the Harvest Medallion! {}  
-Challenge **2** more moderators to gain the last *two* piece(s)!
-
-You can view your current badge collection by using `!league badge_case`.""",
-        """**Congratulations, {}!**
-You've been awarded **2/3** of the Harvest Medallion! {}  
-Challenge **1** more moderators to gain the last *one* piece(s)!
-
-You can view your current badge collection by using `!league badge_case`.""",
-        """**Congratulations, {}!**
-You've successfully completed the Harvest Medallion! {}  
-Thank you for participating in our Fall '17 event and enjoy your permanent ribbon in your badge case!
-
-You can view your current badge collection by using `!league badge_case`."""
-    ]
-
-    _current_medallion = ["pumpkinRibbonUnattained", "pumpkinRibbon1", "pumpkinRibbon2", "pumpkinRibbonComplete"]
-
-    # _active_medallion = {  # Moved to redis so it will be easily modifiable.
-    #     "name": "Harvest Medallion",
-    #     "badge": "fall_medal",
-    # }
-
-    _completed_medallions = {
-        "Harvest Medallion": "pumpkinRibbonComplete",
+        "League Champion": "You've completed 8 Mod League Challenges and earned a role for your account along side a "
+                           "nifty **Champion's Ribbon**!!\n",
+        "Elite League Champion": "You've completed all current Mod League Challenges and have earned an "
+                                 "**Elite Champion's Ribbon**!!\n",
     }
 
     # Little "titles" for people's progress
-    # TODO?
     _titles = {
 
     }
@@ -112,11 +102,56 @@ You can view your current badge collection by using `!league badge_case`."""
 
     @property
     def _leader_ids(self):
-        return list(self.config.smembers("config:pkmn_tourney:leader_ids"))
+        """More efficient way to find out all of the active leaders than searching"""
+        ids = set()
+        for key in self.config.scan_iter("config:pkmn_tourney:leaders:*"):
+            *_, idx = key.split(":")
+            try:
+                ids.add(int(idx))
+            except ValueError:
+                continue
+        return ids
 
     @property
     def _leader_keys(self):
         return ["config:pkmn_tourney:leaders:{}".format(i) for i in self._leader_ids]
+
+    @property
+    def badges(self):
+        """
+
+        :return: {user_id: badge_name} for each badge
+        """
+        return {int(idx): self.config.hget("config:pkmn_tourney:leaders:{}".format(idx), "badge_emoji")
+                for idx in self._leader_ids}
+
+    @property
+    def ribbons(self):
+        """
+        Get a dictionary of all ribbons.
+        Ribbons are stored in redis under
+            config:pkmn_tourney:ribbons:<emoji>
+        where emoji is in the format `xRibbon`
+        :return: Hashmap consisting of {title: emoji} pairs
+        """
+        ribbons = {}
+        for key in self.config.scan_iter("config:pkmn_tourney:ribbons:*"):
+            *_, emoji = key.split(":")
+            ribbon_info = self.config.hgetall(key)
+            try:
+                ribbons[ribbon_info["title"]] = ribbon_info  # For backwards compatibility
+            except KeyError:
+                log.warning("Invalid ribbon in db: {}: {}".format(key, ribbon_info))
+        return ribbons
+
+    @property
+    def inactive_leaders(self):
+        """Returns IDs of inactive leaders"""
+        inactives = []
+        for idx in self._leader_ids:
+            if self.config.hget("config:pkmn_tourney:leaders:{}".format(idx), "inactive"):
+                inactives.append(idx)
+        return inactives
 
     @property
     def green_dot_emoji(self):
@@ -132,21 +167,103 @@ You can view your current badge collection by using `!league badge_case`."""
         return discord.utils.get(self.pokemon_guild.roles, id=334492243928809472)
 
     @property
-    def current_medallion(self):
-        return self.config.hgetall('config:pkmn_tourney:current_medallion')
+    def medallions(self):
+        medallions = {}
+        for key in self.config.scan_iter("config:pkmn_tourney:medallions:*"):
+            *_, emoji = key.split(":")
+            medallions[emoji] = self.config.hgetall(key)
+        return medallions
+
+    @property
+    def active_medallion(self):
+        active_medallion_emoji = self.config.get('config:pkmn_tourney:active_medallion')
+        if str(active_medallion_emoji) == "None" or not active_medallion_emoji:
+            return None
+        else:
+            return self.config.hgetall("config:pkmn_tourney:medallions:{}".format(active_medallion_emoji))
+
+    def _get_medallion_progress_emoji(self, user_pieces_count, base_name):
+        """
+        Return the emoji name for a medallion given the number of pieces collected.
+        :param user_pieces_count: Total number of pieces a user has
+        :param base_name: Base medallion name
+        :return: Medallion emoji name formatted correctly to reflect pieces.
+        """
+        if user_pieces_count == 0:
+            return base_name + "Unattained"
+        # If this fails it's probably because the medallion doesn't exist
+        total_pieces = int(self.config.hget("config:pkmn_tourney:medallions:{}".format(base_name), "pieces"))
+        if user_pieces_count < total_pieces:
+            return base_name + str(user_pieces_count)
+        else:
+            return base_name + "Complete"
 
     def _update_db(self):
-        for leader_id, badge_name in self._badges:
-            battle_format = self.config.hget("config:pkmn_tourney:leaders:{}:normal".format(leader_id), "format")
+        # self.config.hmset("config:pkmn_tourney:ribbons", self._ribbons)
 
-            self.config.remove("config:pkmn_tourney:leaders:{}:easy".format(leader_id))
-            self.config.remove("config:pkmn_tourney:leaders:{}:normal")
+        # Transfer badges
+        print("Updating things")
+        # rip fluffy
+        self.config.delete("config:pkmn_tourney:leaders:125040405212430336:easy")
+        self.config.delete("config:pkmn_tourney:leaders:125040405212430336:normal")
+        self.config.delete("config:pkmn_tourney:leaders:125040405212430336")
+        for key in self.config.scan_iter("user:pkmn_tourney:*"):
+            *_, container, user_id = key.split(":")
+            if container == "fall_medal":
+                self.config.hset("user:{}:pkmn_tourney:medallions:pumpkinRibbon".format(user_id),
+                                 "pieces",
+                                 int(self.config.scard("user:pkmn_tourney:fall_medal:{}".format(user_id))))
+
+            elif container != "medallions":
+                self.config.sadd("user:{}:pkmn_tourney:{}".format(user_id, container), *self.config.smembers(key))
+
+            self.config.delete(key)
+
+        self.config.set("config:pkmn_tourney:active_medallion", None)
+
+        flawless_ribbon = {
+            "title": "Flawless Ribbon",
+            "emoji": "flawlessRibbon",
+            "desc": "You've fought hard and obtained a Flawless Victory! "
+                    "We can't we all be as awesome as you, {0.name}? "
+        }
+
+        self.config.hmset("config:pkmn_tourney:ribbons:flawlessRibbon", flawless_ribbon)
+
+        for ribbon_name, msg in self._champion_message.items():
+            ribbon = {
+                "title": ribbon_name,
+                "emoji": self._ribbons[ribbon_name],
+                "desc": msg
+            }
+
+            self.config.hmset("config:pkmn_tourney:ribbons:{}".format(self._ribbons[ribbon_name]), ribbon)
+
+        for leader_id, badge_name in self._badges.items():
+            battle_format = self.config.hget("config:pkmn_tourney:leaders:{}:normal".format(leader_id), "format")
+            if battle_format is None:
+                battle_format = self.config.hget("config:pkmn_tourney:leaders:{}".format(leader_id), "format_normal")
+
+            self.config.delete("config:pkmn_tourney:leaders:{}:easy".format(leader_id))
+            self.config.delete("config:pkmn_tourney:leaders:{}:normal".format(leader_id))
             leader_info = {
                 "format_normal": battle_format,
-                "badge_name": badge_name,
-                "inactive": "False" if leader_id not in self._retired_members else "True"
+                "badge_emoji": badge_name,
+                "inactive": "False" if leader_id not in self._retired_members else "True",
             }
             self.config.hmset("config:pkmn_tourney:leaders:{}".format(leader_id), leader_info)
+
+        fall_medal = {
+            "pieces": 3,
+            "title": "Harvest Medallion",
+            "emoji": "pumpkinRibbon"
+
+        }
+
+        self.config.hmset("config:pkmn_tourney:medallions:pumpkinRibbon", fall_medal)
+
+    def _is_inactive(self, member_id):
+        return self.config.hget("config:pkmn_tourney:leaders:{}".format(member_id), "inactive")
 
     def _get_emoji_from_name(self, name):
         if name is None:
@@ -156,10 +273,10 @@ You can view your current badge collection by using `!league badge_case`."""
 
     def _get_mod_emoji(self, member_id):
         """Get emoji directly from mod id"""
-        return discord.utils.get(self.emoji_guild.emojis, name=self._badges[member_id])
+        return discord.utils.get(self.emoji_guild.emojis, name=self.badges[member_id])
 
     def _get_badge_short_name(self, member_id):
-        return self._badges[member_id][:-5]
+        return self.badges[member_id][:-5]  # Chop off "badge"
 
     def get_in_the_gym_message(self, include_timestamp=False):
         output = {
@@ -167,9 +284,10 @@ You can view your current badge collection by using `!league badge_case`."""
             "online": [],
             "in_the_gym": []
         }
-        for user_id in self._badges:
+
+        for user_id in self.badges:
             mem = self.pokemon_guild.get_member(user_id)
-            if mem.id not in self._retired_members and mem is not None:
+            if not self._is_inactive(mem.id) and mem is not None:
                 if discord.utils.get(mem.roles, name="In The Gym"):
                     output["in_the_gym"].append("{} {}".format(str(self.green_dot_emoji), mem.display_name))
                 elif mem.status not in [discord.Status.offline, discord.Status.invisible]:
@@ -192,10 +310,10 @@ You can view your current badge collection by using `!league badge_case`."""
     @league.command()
     async def badge_info(self, ctx, badge_name: str):
         """Retreives info about a particular badge"""
-        for mem_id, badge in self._badges.items():
+        for mem_id, badge in self.badges.items():
             short_name = badge[:-5]
             if badge_name == short_name or badge_name == badge:
-                desc = "{} Badge{}".format(short_name, "\n*(Retired)*" if mem_id in self._retired_members else "")
+                desc = "{} Badge{}".format(short_name, "\n*(Inactive)*" if self._is_inactive(mem_id) else "")
                 embed = discord.Embed(description=desc)
                 mem = self.pokemon_guild.get_member(mem_id)
                 embed.set_author(name="{}'s badge.".format(mem.name, short_name),
@@ -207,35 +325,58 @@ You can view your current badge collection by using `!league badge_case`."""
             await ctx.send("Badge not found.")
             return
 
-    # TODO Create is_leader check
     @checks.is_pokemon_mod()
     @league.command()
-    async def set_team(self, ctx, level: str, *, team_info: str):
-        """Sets challenge info and difficulty level
+    async def set_format(self, ctx, *, format_info: str):
+        # Future implementation of difficulty levels
 
-        Level: `normal` or `hard`"""
-        if level in ["normal", "hard"]:
-            self.config.hset("config:pkmn_tourney:leaders:{}:{}".format(ctx.message.author.id, level),
-                             "format", team_info)
-        else:
-            raise commands.UserInputError("Levels are `normal` and `hard`.")
+        # if level in ["normal", "hard"]:
+        #     self.config.hset("config:pkmn_tourney:leaders:{}".format(ctx.message.author.id),
+        #                      "format_{}".format(level), format_info)
+        #     await ctx.send("\N{OK HAND SIGN}")
+        # else:
+        #     raise commands.UserInputError("Levels are `normal` and `hard`.")
 
-    @checks.is_pokemon_mod()
-    @league.command()
-    async def set_format(self, ctx, level: str, *, format_info: str):
-        if level in ["normal", "hard"]:
-            self.config.hset("config:pkmn_tourney:leaders:{}:{}".format(ctx.message.author.id, level),
-                             "format", format_info)
-            await ctx.send("\N{OK HAND SIGN}")
-        else:
-            raise commands.UserInputError("Levels are `normal` and `hard`.")
+        self.config.hset("config:pkmn_tourney:leaders:{}".format(ctx.message.author.id),
+                         "format_normal", format_info)
+        await ctx.send("\N{OK HAND SIGN}")
 
     @league.command(aliases=["profile"])
     async def badge_case(self, ctx, *, member: discord.Member=None):
         """Show a user's profile with corresponding badges based on the mods they've defeated."""
 
+        # Caching values so we only read them once
+        inactive_leaders = self.inactive_leaders
+        ribbons = self.ribbons
+        badges = self.badges
+        active_medallion = self.active_medallion
+
         def get_collection(key):
             return list(self.config.smembers(key)) if self.config.exists(key) else []
+
+        def get_medallions(user_id):
+            active_emoji_in_case = False
+            medallions = {}
+
+            active_medallion_emoji = self.active_medallion["emoji"] if active_medallion is not None else None
+            for hm_key in self.config.scan_iter("user:{}:pkmn_tourney:medallions:*".format(user_id)):
+                *_, emoji_name = hm_key.split(":")
+                piece_count = int(self.config.hget(hm_key, "pieces"))
+                medallion_progress_emoji = self._get_medallion_progress_emoji(piece_count, emoji_name)
+                medallion_title = self.config.hget("config:pkmn_tourney:medallions:{}".format(emoji_name), "title")
+                # only show partial medallions if they're completed
+                if "complete" not in medallion_progress_emoji.lower() and emoji_name != active_medallion_emoji:
+                    continue
+                else:
+                    medallions[medallion_title] = medallion_progress_emoji
+                    # This is gross but I'll have to take it for now
+                    if active_medallion is not None and active_medallion_emoji in medallion_progress_emoji:
+                        active_emoji_in_case = True
+
+            if not active_emoji_in_case and active_medallion_emoji is not None:
+                medallions[active_medallion["title"]] = active_medallion_emoji + "Unattained"
+
+            return medallions
 
         if member is None:
             member = ctx.message.author
@@ -245,36 +386,35 @@ You can view your current badge collection by using `!league badge_case`."""
         embed.set_author(name="Badge collection for {}".format(member.display_name),
                          icon_url=member.avatar_url)
 
-        badge_collection = get_collection("user:pkmn_tourney:badges:{}".format(member.id))
-        ribbon_collection = get_collection("user:pkmn_tourney:ribbons:{}".format(member.id))
-        medallion_collection = get_collection("user:pkmn_tourney:medallions:{}".format(member.id))
+        badge_collection = get_collection("user:{}:pkmn_tourney:badges".format(member.id))
+        ribbon_collection = get_collection("user:{}:pkmn_tourney:ribbons".format(member.id))
+        medallion_collection = get_medallions(member.id)  # Returns a tuple (title, progress_emoji)
 
         # If a badge hasn't been collected, its icon is replaced with a grayed out version.
         # These grayed out badges are shown as `badgenameUnattained`
-        for mod_id, badge in self._badges.items():
-            if mod_id in self._retired_members:
+
+        for mod_id, badge in badges.items():
+            if mod_id in inactive_leaders and badge not in badge_collection:
                 continue
             elif badge not in badge_collection:
                 badge += "Unattained"
             embed.add_field(name=self.pokemon_guild.get_member(mod_id).name,
                             value=str(self._get_emoji_from_name(badge)))
 
-        for title in sorted(self._ribbons.keys(), reverse=True):
-            if self._ribbons[title] in ribbon_collection:
-                embed.add_field(name=title, value=str(self._get_emoji_from_name(self._ribbons[title])))
+        # Clean up in case they have a badge that isn't reflected in the active mod badges
+        for badge_name in self.config.smembers("user:{}:pkmn_tourney:badges".format(member.id)):
+            if badge_name not in badges.values():
+                embed.add_field(name=badge_name[:-5] + "Badge",
+                                value=str(self._get_emoji_from_name(badge_name)))
 
-        for name, medal in self._completed_medallions.items():
-            if medal not in self.current_medallion['emoji'] and medal in medallion_collection:
-                embed.add_field(name=name, value=str(self._get_emoji_from_name(medal)))
+        for title in sorted(ribbons.keys(), reverse=True):
+            if ribbons[title]["emoji"] in ribbon_collection:
+                embed.add_field(name=title, value=str(self._get_emoji_from_name(ribbons[title]["emoji"])))
 
-        if self.current_medallion['name'] != '':
-            if self.config.exists("user:pkmn_tourney:{}:{}".format(self.current_medallion['medal'], member.id)):
-                medal_progress = self.config.scard("user:pkmn_tourney:{}:{}".format(
-                    self.current_medallion['medal'], member.id))
-            else:
-                medal_progress = 0
-            embed.add_field(name=self.current_medallion['name'],
-                            value=str(self._get_emoji_from_name(self._current_medallion[medal_progress])))
+        # Sort over this one in a special way because we only care about the collected ones
+        # and possibly the active yet uncollected one
+        for title, emoji in medallion_collection.items():
+            embed.add_field(name=title, value=str(self._get_emoji_from_name(emoji)))
 
         await ctx.send(embed=embed)
 
@@ -282,50 +422,59 @@ You can view your current badge collection by using `!league badge_case`."""
     @league.command()
     async def leader_info(self, ctx, *, member: discord.Member):
         """Get information on a certain gym leader, including their team and format."""
-        if member is None or member.id not in self._badges:
+        if member is None or member.id not in self.badges:
             await ctx.send("User is not currently a leader.")
             return
         embed = discord.Embed(color=discord.Color.blue(),
                               description="{} Badge".format(self._get_badge_short_name(member.id).capitalize()))
         embed.set_author(name="Leader information for {}{}".format(
-            member.name, " (retired)" if member.id in self._retired_members else ""), icon_url=member.avatar_url)
+            member.name, " (retired)" if self._is_inactive(member.id) else ""), icon_url=member.avatar_url)
         embed.set_thumbnail(url=self._get_mod_emoji(member.id).url)
-        for difficulty, league_name in [("normal", "Mod League"), ("hard", "Mod League Plus")]:
-            if self.config.exists("config:pkmn_tourney:leaders:{}:{}".format(member.id, difficulty)):
-                user_info = self.config.hgetall("config:pkmn_tourney:leaders:{}:{}".format(member.id, difficulty))
-                try:
-                    # If we don't have the format, just omit the field. We can still work if we don't have a team.
-                    self.emb_pag.set_headers([league_name])
-                    for h, p in self.emb_pag.paginate("{}\n{}".format(user_info["format"], user_info.get("team", ""))):
-                        embed.add_field(name=h, value=p)
-                    # embed.add_field(name=league_name, value="{}\n{}".format(user_info["format"],
-                    #                                                         user_info.get("team", "")))
-                except KeyError:
-                    pass
+        user_info = self.config.hgetall("config:pkmn_tourney:leaders:{}".format(member.id))
+        for difficulty, league_name in [("format_normal", "Mod League"), ("format_hard", "Mod League Plus")]:
+            # user_info = self.config.hgetall("config:pkmn_tourney:leaders:{}:{}".format(member.id, difficulty))
+            try:
+                # If we don't have the format, just omit the field. We can still work if we don't have a team.
+                self.emb_pag.set_headers([league_name])
+                for h, p in self.emb_pag.paginate("{}\n{}".format(user_info[difficulty],
+                                                                  user_info.get("{}_team".format(difficulty), ""))):
+                    embed.add_field(name=h, value=p)
+            except KeyError:
+                pass
 
         await ctx.send(embed=embed)
-        # TODO: implement w/l counter
+
+    @checks.r_pokemon()
+    @commands.command()
+    async def in_the_gym(self, ctx):
+        """View a list of mod league leaders."""
+        await ctx.send("This command has been removed, please check the channel pins in <#325764029538762763> to "
+                       "view an up-to-date list of leaders.")
 
     @checks.is_pokemon_mod()
-    @league.command(hidden=True)
+    @league.command()
     async def grant_badge(self, ctx, *, member: discord.Member):
         """Grant the mod's own badge to the member."""
-        self.config.sadd("user:pkmn_tourney:badges:{}".format(member.id),
-                         self._badges[ctx.message.author.id])
-        # TODO: Add a list of badge names
-        total_badges = self.config.scard("user:pkmn_tourney:badges:{}".format(member.id))
+        badges = self.badges
+        ribbons = self.ribbons
+        badges_key = "user:{}:pkmn_tourney:badges".format(member.id)
+        self.config.sadd(badges_key,
+                         badges[ctx.message.author.id])
+
+        total_badges = self.config.scard(badges_key)
         if total_badges == 8:
-            self.config.sadd("user:pkmn_tourney:ribbons:{}".format(member.id), self._ribbons["League Champion"])
+            self.config.sadd("user:{}:pkmn_tourney:ribbons".format(member.id), ribbons["League Champion"])
             await member.add_roles(self.champion_role)
             champion_msg = self._champion_message["League Champion"].format(
-                self._get_emoji_from_name(self._ribbons["League Champion"]))
-        elif total_badges == len([i for i in self._badges if i not in self._retired_members]):
-            if not self.config.sismember("user:pkmn_tourney:ribbons:{}".format(member.id), "Elite League Champion"):
+                self._get_emoji_from_name(ribbons["League Champion"]))
+        elif total_badges == len(self.badges.keys()) - len(self.inactive_leaders):
+            self.config.sadd("user:{}:pkmn_tourney:ribbons".format(member.id), ribbons["Elite League Champion"])
+            if not self.config.sismember("user:{}:pkmn_tourney:ribbons".format(member.id), "Elite League Champion"):
                 champion_msg = self._champion_message["Elite League Champion"].format(
-                    self._get_emoji_from_name(self._ribbons["Elite League Champion"]))
+                    self._get_emoji_from_name(ribbons["Elite League Champion"]))
             else:
                 champion_msg = ""
-            self.config.sadd("user:pkmn_tourney:ribbons:{}".format(member.id), self._ribbons["Elite League Champion"])
+            self.config.sadd("user:pkmn_tourney:ribbons:{}".format(member.id), ribbons["Elite League Champion"])
 
         else:
             champion_msg = ""
@@ -333,48 +482,169 @@ You can view your current badge collection by using `!league badge_case`."""
                                               str(self._get_mod_emoji(ctx.message.author.id)), champion_msg))
 
     @checks.is_pokemon_mod()
-    @league.command(hidden=True)
-    async def grant_flawlessvictory(self, ctx, *, member: discord.Member):
-        """Grant the Flawless Victory ribbon"""
-        if self.config.sismember("user:pkmn_tourney:ribbons:{}".format(member.id), "flawlessRibbon"):
-            await ctx.author.send("User {} already has the Flawless Ribbon".format(member.name))
-        else:
-            self.config.sadd("user:pkmn_tourney:ribbons:{}".format(member.id), "flawlessRibbon")
-            await ctx.send(flawless_victory_message.format(member, self._get_emoji_from_name("flawlessRibbon")))
+    @league.command()
+    async def grant_ribbon(self, ctx, member: discord.Member, *, ribbon_name: str):
+        """Grant a user a ribbon."""
 
-    @checks.is_pokemon_mod()      # TODO: This will be changed for future medal events so that any mod can only grant
-    @league.command(hidden=True)  # one piece to one user. Use a hash instead of set to track mod ID as well
-    async def grant_fallmedal(self, ctx, *, member: discord.Member):
-        """Grants a piece of Harvest Medallion"""
-        if self.config.exists("user:pkmn_tourney:{}:{}".format(self.current_medallion['medal'], member.id)):
-            medal_progress = self.config.scard("user:pkmn_tourney:{}:{}".format(self.current_medallion['medal'],
-                                                                                member.id))
-        else:
-            medal_progress = 0
-        if medal_progress < 3:
-            medal_name = self._current_medallion[medal_progress + 1]
-            self.config.sadd("user:pkmn_tourney:{}:{}".format(self.current_medallion['medal'], member.id), medal_name)
-            if medal_name == self.current_medallion['emoji']:
-                self.config.sadd("user:pkmn_tourney:medallions:{}".format(member.id), medal_name)
-            await ctx.send(self._medallion_message[medal_progress + 1].format(member.mention,
-                                                                              self._get_emoji_from_name(medal_name)))
+        active_ribbons = self.ribbons  # Just pull this once
 
-    @checks.r_pokemon()
-    @commands.command()
-    async def in_the_gym(self, ctx):
-        """View a list of mod league leaders."""
-        if ctx.message.channel.id != 198187334968016906:
-            await ctx.send("Please use this command in <#198187334968016906>.\nPlease note this command is deprecated.")
+        if ribbon_name not in active_ribbons or not ribbon_name:
+            await ctx.message.author.send("Ribbon doesn't exist. Active ribbons are {}".format(active_ribbons.keys()))
             return
 
-        await ctx.send(embed=self.get_in_the_gym_message(),
-                       content="**Note that this command is deprecated, please check the channel"
-                               "pins in <#325764029538762763> to view an up-to-date list of leaders.**")
+        cur_ribbon = active_ribbons[ribbon_name]
+        emoji = cur_ribbon["emoji"]
+
+        if self.config.sismember("user:{}:pkmn_tourney:ribbons".format(member.id), emoji):
+            await ctx.send("User {} already has the {}!".format(member.name, ribbon_name))
+        else:
+            self.config.sadd("user:{}:pkmn_tourney:ribbons".format(member.id), emoji)
+            # This double formatting stuff is needed so that we can possibly inject format strings into descs.
+            await ctx.send((ribbon_get_message % (cur_ribbon.get("desc", "") + "\n"))
+                           .format(member, ribbon_name, self._get_emoji_from_name(emoji)))
+
+    """
+    Medallion representation:
+    config:pkmn_tourney:medallions:<emoji>
+        title: Full name to be displayed to the user as a title. e.g. "Harvest Medallion"
+        emoji: Shortened name w/o type, except for pumpkin which is a special case.
+        pieces: number of total pieces required to have a completed medal.
+    
+    user:<id>:pkmn_tourney:medallions:<emoji> (hm)
+        pieces: number of pieces the user has
+        (extra space to be expanded at some future point)
+    
+    """
+
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def grant_medal_piece(self, ctx, *, member: discord.Member):
+        """Grants a piece of the current active medallion"""
+
+        active_medal_info = self.active_medallion
+        if active_medal_info is None:
+            await ctx.send("This medallion is no longer addable.")
+            return
+
+        active_medal_name = active_medal_info["emoji"]
+
+        if self.config.exists("user:{}:pkmn_tourney:medallions:{}".format(member.id, active_medal_info['emoji'])):
+            user_medal_pieces_held = int(self.config.hget("user:{}:pkmn_tourney:medallions:{}".format(
+                member.id, active_medal_name), "pieces"))
+        else:
+            user_medal_pieces_held = 0
+
+        if user_medal_pieces_held == int(active_medal_info["pieces"]):
+            await ctx.send("{} has already completed their {}!".format(member.mention,
+                                                                       active_medal_info["title"]))
+            return
+
+        self.config.hincrby("user:{}:pkmn_tourney:medallions:{}".format(member.id, active_medal_name), "pieces", 1)
+        user_medal_pieces_held += 1
+
+        # Get the name combined with the number of pieces the user has -- or complete.
+        full_emoji_name = self._get_medallion_progress_emoji(user_medal_pieces_held, active_medal_name)
+        if "complete" in full_emoji_name.lower():
+            await ctx.send(medallion_complete_message.format(member.mention, active_medal_info["title"],
+                                                             self._get_emoji_from_name(full_emoji_name)))
+        else:
+            await ctx.send(new_medallion_piece_message.format(
+                member.mention,
+                active_medal_info["title"],
+                self._get_emoji_from_name(full_emoji_name),
+                user_medal_pieces_held,
+                active_medal_info["pieces"]
+            ))
+
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def create_ribbon(self, ctx, emoji_base_name: str, *, title: str):
+        """Create a new ribbon"""
+        new_ribbon = {
+            "title": title,
+            "emoji": emoji_base_name,
+        }
+
+        self.config.hmset("config:pkmn_tourney:ribbons:{}".format(emoji_base_name), new_ribbon)
+        await ctx.send(
+            "New ribbon created. You can update its description with `!set_ribbon_message <emoji> <message>`",
+            embed=utils.embed_from_dict(new_ribbon, description="Current ribbon config")
+        )
+
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def set_ribbon_message(self, ctx, emoji_name: str, *, description: str):
+        """
+        Set a special message for users when they are granted their ribbon.
+        """
+        ribbon_emoji = self.ribbons.values()
+
+        if emoji_name not in ribbon_emoji:
+            await ctx.message.author.send("Invalid ribbon emoji. Those that exist are {}".format(ribbon_emoji))
+            return
+        try:
+            self.config.hset("config:pkmn_tourney:ribbons:{}".format(emoji_name), "desc", description)
+        except RedisError:
+            raise commands.BadArgument("Could not find that ribbon. Did you mean to input an emoji?")
+        else:
+            await ctx.send("Description for ribbon set.",
+                           embed=utils.embed_from_dict(
+                               self.config.hgetall("config:pkmn_tourney:ribbons:{}".format(emoji_name)),
+                               description="Current ribbon config"))
+
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def create_new_medal(self, ctx, emoji_name: str, pieces: int, *, full_name: str):
+        """Create a new medallion."""
+        self.config.hmset("config:pkmn_tourney:medallions:{}".format(emoji_name), {
+            "emoji": emoji_name,
+            "title": full_name,
+            "pieces": pieces
+        })
+
+        await ctx.send("\N{OK HAND SIGN}")
+
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def set_active_medal(self, ctx, emoji_name: str=None):
+        """Set the medallion which will show in user's badge cases if incomplete."""
+        medallions = self.medallions
+        if emoji_name not in medallions and emoji_name is not None:
+            await ctx.message.author.send("Medal doesn't exist. Addable medals are {}".format(medallions.keys()))
+            return
+        self.config.set("config:pkmn_tourney:active_medallion", emoji_name)
+        await ctx.send("Active medallion set.",
+                       embed=utils.embed_from_dict(self.active_medallion, description="Medallion info"))
+
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def add_leader(self, ctx, member: discord.Member, *, badge_emoji: str):
+        """Add a new leader to the league."""
+        base_leader_info = {
+            "inactive": False,
+            "badge_emoji": badge_emoji
+        }
+
+        self.config.hmset("config:pkmn_tourney:leaders:{}".format(member.id), base_leader_info)
+        await ctx.send("\N{OK HAND SIGN}")
+
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def mark_leader_inactive(self, ctx, member: discord.Member):
+        """Mark a leader as inactive, hiding their unattained badge from badge cases."""
+        key = "config:pknn_tourney:leaders:{}".format(member.id)
+        if self.config.exists(key):
+            self.config.hset(key, "inactive", True)
+            await ctx.send("Member marked inactive.",
+                           embed=utils.embed_from_dict(self.config.hgetall(key)))
+        else:
+            await ctx.send("Invalid member.")
+            return
 
     @checks.sudo()
-    @commands.command()
-    async def update_db_format(self):
-        pass
+    @commands.command(enabled=False)
+    async def update_db(self, ctx):
+        self._update_db()
 
     async def on_timer_update(self, secs):
         if secs % 60 == 0:
@@ -385,7 +655,11 @@ You can view your current badge collection by using `!league badge_case`."""
                 await new_msg.pin()
                 self.config.set("config:pkmn_tourney:gym_message_id", new_msg.id)
             else:
-                msg = await chan.get_message(int(gym_msg_id))
+                try:
+                    msg = await chan.get_message(int(gym_msg_id))
+                except AttributeError:  # Usually pops up during debugging as chan is None
+                    return
+
                 try:
                     await msg.edit(embed=self.get_in_the_gym_message(include_timestamp=True))
                 except (discord.HTTPException, discord.Forbidden):
