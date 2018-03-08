@@ -21,6 +21,7 @@ class PMs:
             "anime": 244848600968986626,
             "reddit news": 296322382870609921,
             "event": 389430411152850949,
+            "gaming": 407210701417873428
         }
 
     @property
@@ -116,7 +117,7 @@ class PMs:
         return (datetime.datetime.utcnow() - member.joined_at) > delay
 
     @commands.command()
-    async def set(self, ctx, role_name: str):
+    async def set(self, ctx, *, role_name: str):
         """Self-assign a certain role.
         Roles are mature, anime, subnews, and politics (requires reg).
         """
@@ -172,7 +173,7 @@ class PMs:
             await self.add_role(ctx, role_name, self.roles[role_name])
 
     @commands.command()
-    async def unset(self, ctx, role_name: str):
+    async def unset(self, ctx, *, role_name: str):
         """Un-assign a role assigned with !set"""
         role_name = role_name.lower()
 
@@ -196,7 +197,7 @@ class PMs:
 
     @checks.is_pokemon_mod()
     @commands.command(hidden=True)
-    async def blacklist_user(self, ctx, user: discord.Member, command_name: str):
+    async def blacklist_user(self, ctx, user: discord.Member, *, command_name: str):
         """Blacklist a user from using a certain command"""
 
         # hack
@@ -204,8 +205,8 @@ class PMs:
         if command_name in ["set18", "set_18"]:
             command_name = "mature"
 
-        if command_name not in ["mature", "anime", "subnews", "politics"]:
-            await ctx.send('Commands are ["mature", "anime", "subnews", "politics"]')
+        if command_name not in self.roles.keys():
+            await ctx.send('Commands are {}'.format(self.roles.keys()))
             return
 
         self.config.sadd("admin:role_blacklist:{}".format(command_name), user.id)
@@ -214,13 +215,13 @@ class PMs:
 
     @checks.is_pokemon_mod()
     @commands.command(hidden=True)
-    async def unblacklist_user(self, ctx, user: discord.Member, command_name: str):
+    async def unblacklist_user(self, ctx, user: discord.Member, *, command_name: str):
         key = "admin:role_blacklist:{}".format(command_name)
 
         if command_name in ["set18, set_18, mature"]:
             command_name = "mature"
-        if command_name not in ["mature", "anime", "subnews", "politics"]:
-            await ctx.send('Commands are ["mature", "anime", "subnews", "politics"]')
+        if command_name not in self.roles.keys():
+            await ctx.send('Commands are {}'.format(self.roles.keys()))
             return
         if self.config.exists(key) and self.config.sismember(key, user.id):
             self.config.srem(key, user.id)

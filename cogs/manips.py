@@ -15,6 +15,7 @@ import numpy as np
 import cv2
 from random import randint
 import math
+from uuid import uuid4
 
 # TODO Make these work with attachments
 

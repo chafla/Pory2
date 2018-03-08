@@ -46,6 +46,12 @@ class Logs:
             await ctx.send("Logging is now enabled.")
             self.config.set("user:{}:logs:enabled".format(ctx.message.author.id), "True")
 
+    @checks.in_pm()
+    @commands.command()
+    async def disable_logging(self, ctx):
+        self.config.delete("user:{}:logs:enabled".format(ctx.message.author.id))
+        await ctx.send("You've now disabled logging for usermarkov and get_wc.")
+
     async def on_message(self, message):
 
         if message.author.id == self.bot.user.id:
@@ -102,9 +108,13 @@ class Logs:
         markov_guild_whitelist = [111504456838819840,
                                   175094349116342274,
                                   117485575237402630,
-                                  155800402514673664]
+                                  155800402514673664,
+                                  401182039421747210,
+                                  274731851661443074]
 
-        markov_channel_blacklist = [319309418204233740]
+        markov_channel_blacklist = [319309418204233740,
+                                    274734349981712385,
+                                    338455130531692545]
         # lol this is pretty messy
         if message.guild.id in markov_guild_whitelist and message.channel.id not in markov_channel_blacklist \
                 and message.channel.name != "earnest_chat":

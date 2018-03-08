@@ -1,5 +1,15 @@
 """
 Commands for imgur lists and stuff.
+
+Config lies under `img`
+
+img:
+    albums:
+        album_name:ids:
+            set of album IDs
+    cache:
+
+
 """
 import random
 from imgurpython import ImgurClient
@@ -186,7 +196,6 @@ class ImageList:
             if album_image_urls:
                 images.extend(album_image_urls)
                 config.sadd("img:cache:{}:albums:{}:urls".format(self.name, album_id), *album_image_urls)
-                config.sadd("img:cache:{}:album_ids".format(self.name), album_id)  # for ease of use
         try:
             config.sadd("img:cache:{}:imgs".format(self.name), *images)
         except ResponseError:
@@ -196,7 +205,7 @@ class ImageList:
 
     @classmethod
     def from_cache(cls, image_list_name):
-        album_ids = list(config.smembers("img:cache:{}:album_ids".format(image_list_name)))  # They're sets atm
+        album_ids = list(config.smembers("img:albums:{}:ids".format(image_list_name)))
         image_list = list(config.smembers("img:cache:{}:imgs".format(image_list_name)))
         return cls(image_list_name, album_ids, image_list=image_list)
 
@@ -243,7 +252,7 @@ class ImageListCommands:
                                                     cooldown_group="image_list",
                                                     priority_blacklist=[319309336029560834]):  # #mature_chat
 
-            if random.random() < 0.005:
+            if random.random() < 0.0005:
                 await ctx.send("https://i.imgur.com/AYoDloF.jpg")  # LUL
             else:
                 obj = discord.utils.get(self.list_objs, name=ctx.command.name)
@@ -296,11 +305,11 @@ class ImageListCommands:
     @checks.sudo()
     async def add_image_list(self, ctx, list_name: str, list_id: str):
         """Add an image list for a command."""
-        exists = True
+        command_exists = True
         if not config.exists("img:albums:{}:ids".format(list_name)):
-            exists = False
+            command_exists = False
         config.sadd("img:albums:{}:ids".format(list_name), list_id)
-        if not exists:
+        if not command_exists:
             self.list_objs.append(ImageList(list_name, [list_id]))
         else:
             obj = discord.utils.get(self.list_objs, name=list_name)
@@ -311,7 +320,7 @@ class ImageListCommands:
             obj.to_cache()
 
         await ctx.send("Image list added to datafile successfully.")
-        if not exists:
+        if not command_exists:
             await ctx.send("**Command new to DB, may need to be added or may be incorrect.**")
 
     @checks.sudo()
@@ -616,6 +625,34 @@ class ImageListCommands:
     async def espy(self, ctx):
         if not isinstance(ctx.message.channel, discord.DMChannel) and ctx.message.guild.id in [283101596806676481]:
             await self.process_command(ctx)
+
+    @commands.command()
+    async def drag(self, ctx):
+        await self.process_command(ctx)
+
+    @commands.command()
+    async def chu(self, ctx):
+        await self.process_command(ctx)
+
+    @commands.command()
+    async def goo(self, ctx):
+        await self.process_command(ctx)
+
+    @commands.command(hidden=True)
+    async def kekx(self, ctx):
+        await self.process_command(ctx)
+
+    @commands.command()
+    async def pory(self, ctx):
+        await self.process_command(ctx)
+
+    @commands.command()
+    async def trash(self, ctx):
+        await self.process_command(ctx)
+
+    @commands.command()
+    async def forget(self, ctx):
+        await self.process_command(ctx)
 
     # Adding commands
 

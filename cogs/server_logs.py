@@ -7,6 +7,7 @@ from .utils.utils import get_timestamp, download_image
 import logging
 from asyncio import TimeoutError, sleep
 from io import BytesIO
+from asyncio import sleep
 
 log = logging.getLogger()
 
@@ -66,7 +67,8 @@ class ServerLogs:
         :param guild_id: The tracked guild's ID
         :return: guild config dict, or None if it doesn't exist
         """
-        assert isinstance(guild_id, (str, int))
+        if isinstance(guild_id, discord.Guild):
+            guild_id = guild_id.id
 
         try:
             return self._config_cache[int(guild_id)]
@@ -91,9 +93,9 @@ class ServerLogs:
             return False
         elif guild.id not in self._config_cache.keys():
             return False
-        elif priority_event and self._config_cache[guild.id]["priority_modlog"] is None:
+        elif priority_event and self._config_cache[guild.id].get("priority_modlog") is None:
             return False
-        elif not priority_event and self._config_cache[guild.id]["default_modlog"] is None:
+        elif not priority_event and self._config_cache[guild.id].get("default_modlog") is None:
             return False
         else:
             return True
@@ -108,13 +110,18 @@ class ServerLogs:
 
     async def send_embed_to_modlog(self, embed, guild_id, priority=False, **kwargs):
         """Have to use this backwards-ass method because it throws http exceptions."""
-        assert isinstance(guild_id, (int, str))  # So we don't accidentally pass in a Guild object
+        if isinstance(guild_id, discord.Guild):
+            guild_id = guild_id.id
 
         guild_config = self.get_guild_config(guild_id)
-        dest_channel_id = int(guild_config["default_modlog"] if not priority else guild_config["priority_modlog"])
+        dest_channel_id = (guild_config.get("default_modlog") if not priority
+                           else guild_config.get("priority_modlog"))
+
+        if dest_channel_id is None:
+            return
 
         try:
-            await self.bot.get_channel(dest_channel_id).send(embed=embed, **kwargs)
+            await self.bot.get_channel(int(dest_channel_id)).send(embed=embed, **kwargs)
         except discord.HTTPException:
             # Silently swallow the error
             log.exception("Exception occurred when sending embed.\nParams:\n{}".format(embed.fields))
@@ -128,6 +135,7 @@ class ServerLogs:
         return embed
 
     async def _get_last_audit_action(self, guild_id, action, member):
+        await sleep(0.5)
         async for log_entry in self.bot.get_guild(guild_id).audit_logs(action=action, limit=10):
             if log_entry.target.id == member.id:
                 # Let's stop at the first entry.
@@ -223,7 +231,7 @@ class ServerLogs:
                 if log_entry.target.id == member.id:  # The leave was a kick
                     leave_was_kick = True
                     try:
-                        mod_responsible = getattr(log_entry, "name", "Unknown")
+                        mod_responsible = getattr(log_entry, "user", "Unknown")
                         reason = getattr(log_entry, "reason", "No reason provided.")
                         embed = discord.Embed(title="User {0} was kicked.".format(str(member)),
                                               color=colors["kick"])
@@ -322,11 +330,14 @@ class ServerLogs:
     @commands.command()
     async def register_modlog(self, ctx, level: str, guild_id: int=None):
         """Set the current channel to be the active modlog."""
+        if guild_id is None:
+            guild_id = ctx.message.guild.id
+
+        if not self.config.exists("config:mod:config:{}".format(guild_id)):
+            self._create_guild_config(guild_id)
+
         if level.lower() not in ["default", "priority"]:
             raise commands.BadArgument("Did you mean 'priority' or 'default'?")
-
-        if guild_id is None:
-            guild_id = ctx.guild.id
 
         config = self.get_guild_config(ctx.message.guild.id)
         config["{}_modlog".format(level.lower())] = ctx.message.channel.id

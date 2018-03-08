@@ -1,4 +1,4 @@
-"""Stuff for shinx cafe"""
+"""don't uwu, $350 penalty"""
 import re
 import discord
 from discord.ext import commands

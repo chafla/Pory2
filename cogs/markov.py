@@ -44,7 +44,7 @@ class Markov:
         elif ctx.message.author.guild == self.r_pkmn:
             return self.verified_role in ctx.message.author.roles
         else:
-            return self.config.get("user:{}:logs:enabled".format(ctx.message.author.id)) == True
+            return self.config.get("user:{}:logs:enabled".format(ctx.message.author.id)) is True
 
     async def check_verification(self, ctx):
         verification = self._is_verified(ctx)
