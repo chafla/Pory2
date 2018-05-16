@@ -13,10 +13,8 @@ import discord
 from discord.ext import commands
 import numpy as np
 import cv2
-from random import randint
+from random import randint, random
 import math
-from uuid import uuid4
-
 # TODO Make these work with attachments
 
 
@@ -77,7 +75,7 @@ class Manips:
     @staticmethod
     def find_eyes(image_path, base_img_size):
         """Find eyes, returning an (x, y, w, h) tuple of the two largest"""
-        # TODO Make this a filter_eyes thing that also checks relative coords
+        # TODO Make this a filter_eyes thing that also checks relative coords 
         eye_cascade = cv2.CascadeClassifier('templates/cascades/haarcascade_eye.xml')
         cv2_img = cv2.imread(image_path)
         gray = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2GRAY)
@@ -179,6 +177,62 @@ class Manips:
         return output
 
     @staticmethod
+    def disintegrate(base_image_fp):
+        """
+        I don't feel so good, Mr. Stark...
+        :param base_image_fp:
+        :return:
+        """
+        if isinstance(base_image_fp, io.BytesIO):
+            # https://stackoverflow.com/questions/46624449/load-bytesio-image-with-opencv
+            file_bytes = np.asarray(bytearray(base_image_fp.read()), dtype=np.uint8)
+            cv2_img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        else:
+            cv2_img = cv2.imread(base_image_fp)
+        cv2_image_tmp = np.copy(cv2_img)
+
+        print(cv2_img.shape)
+
+        h, w, _ = cv2_img.shape
+
+        chunk_amount = 75
+        chunk_size = max(int((w + h) // (2) // chunk_amount), 5)
+
+        for r in range(chunk_size - 1, h - chunk_size, chunk_size):
+            for c in range(chunk_size - 1, w - chunk_size, chunk_size):
+                # One chunk is chunk_size square
+
+                # Randomly determine if we want to even do anything with this chunk
+                # Make it random but biased towards values with a greater x
+                if random() + (c / w) > 0.5:
+                    offset_amount = int(chunk_size * random() * (c / w) * 0.5)
+                    # print("offset amount", offset_amount)
+                    # The amount that the chunk has moved
+                    vert_offset = r - (chunk_size * offset_amount)
+                    horiz_offset = c + (chunk_size * offset_amount)
+
+                    if vert_offset == 0:
+                        continue
+
+                    target_chunk_offset = int(random() * c / 3)
+                    vert_offset -= target_chunk_offset
+                    horiz_offset += target_chunk_offset
+
+                    try:
+                        cv2_image_tmp[vert_offset:vert_offset + chunk_size - 1, horiz_offset:horiz_offset + chunk_size - 1, :] = \
+                            cv2_img[r:r + chunk_size - 1, c:c + chunk_size - 1, :]  # correct
+                    except ValueError:
+                        # Tends to happen around threshold values which we don't care about anyway
+                        # TODO Removing this try/except might be a point to optimize
+                        pass
+
+        # Ideally this would be written out to a BytesIO object but it's hard to get that to work with openCV so
+        # this'll have to do
+        cv2.imwrite("test_out.png", cv2_image_tmp)
+
+        return "test_out.png"
+
+    @staticmethod
     def add_image_underneath(base_image_path, overlay_fp, output_fp):
         """
         Add a template image underneath a base image, stretching out the template so that it fits.
@@ -269,10 +323,10 @@ class Manips:
     @staticmethod
     def _get_avatar_url(user):
         """Pull the right avatar url type, since magick breaks down with .webp"""
-        if user.avatar.startswith("a"):
-            url = user.avatar_url_as(format="gif")
-        else:
-            url = user.avatar_url_as(format="png")
+        # if user.avatar.startswith("a"):
+        #     url = user.avatar_url_as(format="gif")
+        # else:
+        url = user.avatar_url_as(format="png")
 
         return url.split("?")[0]  # we really don't care about the size, chop it off
 
@@ -436,6 +490,16 @@ class Manips:
         async with ctx.typing():
             base_bytes = await self.download_image_to_bytes(image_url)
             fp = self.overlay_sunglasses(base_bytes)
+
+            await ctx.send(file=discord.File(fp))
+
+    @checks.is_regular()
+    @commands.command()
+    async def dissolve(self, ctx, image_url: str=None) -> None:
+        image_url = await self._get_image_url(ctx, image_url)
+        async with ctx.typing():
+            base_bytes = await self.download_image_to_bytes(image_url)
+            fp = self.disintegrate(base_bytes)
 
             await ctx.send(file=discord.File(fp))
 
