@@ -2,6 +2,7 @@
 import logging
 import discord
 from discord.ext import commands
+from discord.ext.commands import Context
 from redis import RedisError
 
 from .utils import checks, utils
@@ -97,6 +98,10 @@ class PokemonTourney:
         self.emb_pag = utils.Paginator(page_limit=1020, trunc_limit=1850)
 
     @property
+    def emoji_pool(self):
+        return self.bot.get_guild(320254070453567489).emojis + self.bot.get_guild(458474187988664333).emojis
+
+    @property
     def emoji_guild(self):
         return self.bot.get_guild(320254070453567489)
 
@@ -165,6 +170,10 @@ class PokemonTourney:
     @property
     def champion_role(self):
         return discord.utils.get(self.pokemon_guild.roles, id=334492243928809472)
+
+    @property
+    def leader_for_a_year_role(self):
+        return discord.utils.get(self.pokemon_guild.roles, id=417055258716405761)
 
     @property
     def medallions(self):
@@ -269,16 +278,16 @@ class PokemonTourney:
         if name is None:
             return "\N{QUESTION MARK}"
         else:
-            return discord.utils.get(self.emoji_guild.emojis, name=name)
+            return discord.utils.get(self.emoji_pool, name=name)
 
     def _get_mod_emoji(self, member_id):
         """Get emoji directly from mod id"""
-        return discord.utils.get(self.emoji_guild.emojis, name=self.badges[member_id])
+        return discord.utils.get(self.emoji_pool, name=self.badges[member_id])
 
     def _get_badge_short_name(self, member_id):
         return self.badges[member_id][:-5]  # Chop off "badge"
 
-    def get_in_the_gym_message(self, include_timestamp=False):
+    def get_in_the_gym_message(self, include_timestamp=False, include_online_members=False):
         output = {
             "offline": [],
             "online": [],
@@ -290,7 +299,7 @@ class PokemonTourney:
             if not self._is_inactive(mem.id) and mem is not None:
                 if discord.utils.get(mem.roles, name="In The Gym"):
                     output["in_the_gym"].append("{} {}".format(str(self.green_dot_emoji), mem.display_name))
-                elif mem.status not in [discord.Status.offline, discord.Status.invisible]:
+                elif mem.status not in [discord.Status.offline, discord.Status.invisible] and include_online_members:
                     output["online"].append("🔵 {}".format(mem.display_name))
                 else:
                     output["offline"].append("⚫ {}".format(mem.display_name))
@@ -301,6 +310,38 @@ class PokemonTourney:
             embed.set_footer(text="Last updated {}".format(utils.get_timestamp()))
 
         return embed
+
+    async def grant_badge_to_target(self, ctx: Context, target: discord.Member, badge_holder: discord.Member):
+        """
+        Grant a badge to a user. Takes care of all of the ceremony and stuff as well.
+        :param ctx: Message context.
+        :param target: User to add the badge to.
+        :param badge_holder: Member who holds the badge.
+        """
+        badges = self.badges
+        ribbons = self.ribbons
+        badges_key = "user:{}:pkmn_tourney:badges".format(target.id)
+        self.config.sadd(badges_key, badges[badge_holder.id])
+
+        total_badges = self.config.scard(badges_key)
+        if total_badges == 8:
+            self.config.sadd("user:{}:pkmn_tourney:ribbons".format(target.id), ribbons["League Champion"])
+            await target.add_roles(self.champion_role)
+            champion_msg = self._champion_message["League Champion"].format(
+                self._get_emoji_from_name(ribbons["League Champion"]))
+        elif total_badges == len(self.badges.keys()) - len(self.inactive_leaders):
+            self.config.sadd("user:{}:pkmn_tourney:ribbons".format(target.id), ribbons["Elite League Champion"])
+            if not self.config.sismember("user:{}:pkmn_tourney:ribbons".format(target.id), "Elite League Champion"):
+                champion_msg = self._champion_message["Elite League Champion"].format(
+                    self._get_emoji_from_name(ribbons["Elite League Champion"]))
+            else:
+                champion_msg = ""
+            self.config.sadd("user:pkmn_tourney:ribbons:{}".format(target.id), ribbons["Elite League Champion"])
+
+        else:
+            champion_msg = ""
+        await ctx.send(victory_message.format(target.mention, badge_holder.name,
+                                              str(self._get_mod_emoji(badge_holder.id)), champion_msg))
 
     @commands.group()
     async def league(self, ctx):
@@ -455,31 +496,13 @@ class PokemonTourney:
     @league.command()
     async def grant_badge(self, ctx, *, member: discord.Member):
         """Grant the mod's own badge to the member."""
-        badges = self.badges
-        ribbons = self.ribbons
-        badges_key = "user:{}:pkmn_tourney:badges".format(member.id)
-        self.config.sadd(badges_key,
-                         badges[ctx.message.author.id])
+        await self.grant_badge_to_target(ctx, member, ctx.message.author)
 
-        total_badges = self.config.scard(badges_key)
-        if total_badges == 8:
-            self.config.sadd("user:{}:pkmn_tourney:ribbons".format(member.id), ribbons["League Champion"])
-            await member.add_roles(self.champion_role)
-            champion_msg = self._champion_message["League Champion"].format(
-                self._get_emoji_from_name(ribbons["League Champion"]))
-        elif total_badges == len(self.badges.keys()) - len(self.inactive_leaders):
-            self.config.sadd("user:{}:pkmn_tourney:ribbons".format(member.id), ribbons["Elite League Champion"])
-            if not self.config.sismember("user:{}:pkmn_tourney:ribbons".format(member.id), "Elite League Champion"):
-                champion_msg = self._champion_message["Elite League Champion"].format(
-                    self._get_emoji_from_name(ribbons["Elite League Champion"]))
-            else:
-                champion_msg = ""
-            self.config.sadd("user:pkmn_tourney:ribbons:{}".format(member.id), ribbons["Elite League Champion"])
-
-        else:
-            champion_msg = ""
-        await ctx.send(victory_message.format(member.mention, ctx.message.author.name,
-                                              str(self._get_mod_emoji(ctx.message.author.id)), champion_msg))
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def grant_other_badge(self, ctx, badge_holder: discord.Member, target: discord.Member):
+        """Grant some other mod's badge to a member."""
+        await self.grant_badge_to_target(ctx, target, badge_holder)
 
     @checks.is_pokemon_mod()
     @league.command()
@@ -630,9 +653,80 @@ class PokemonTourney:
 
     @checks.is_pokemon_mod()
     @league.command()
+    async def update_tournament_champion(self, ctx):
+        """Update the database based on whoever holds the role of tournament champion"""
+        try:
+            cur_champion_id = int(self.config.hget("config:pkmn_tourney:champion", "user_id"))
+        except RedisError:
+            cur_champion_id = None
+        cur_champion_member = discord.utils.find(self.pokemon_guild.members,
+                                                 lambda m: any([r for r in m.roles if m.id == 417055258716405761]))
+
+        # TODO clean up this repetition
+
+        if cur_champion_id is None:
+            if cur_champion_member is None:
+                await ctx.send("There is currently no champion in the database, nor any member with the champion role.")
+                return
+            else:
+                self.config.hset("config:pkmn_tourney:champion", "user_id", cur_champion_member.id)
+                self.config.hmset("config:pkmn_tourney:leaders:{}".format(cur_champion_member.id), {
+                    "inactive": True,  # Marked as inactive, they can still grant badges but won't show up otherwise
+                    "temporary": True,
+                    "badge_emoji": self.config.hget("config:pkmn_tourney:champion:badge_emoji"),
+                    "format_normal": self.config.hget("config:pkmn_tourney:champion:format")
+                })
+                await ctx.send("Member {} was registered as a new leader.".format(cur_champion_member))
+        else:
+            if cur_champion_member is None:
+                # Clear the current active member
+                self.config.hdel("config:pkmn_tourney:champion", "user_id")
+                await ctx.send("Current leader has been reset in database.")
+            elif cur_champion_member.id == cur_champion_id:
+                await ctx.send("Cur champion in database matches user with role, no changes were made.")
+                return
+            else:
+                # cur champion in db is not None but a different user has the role
+                self.config.hset("config:pkmn_tourney:champion", "user_id", cur_champion_member.id)
+                self.config.hmset("config:pkmn_tourney:leaders:{}".format(cur_champion_member.id), {
+                    "inactive": True,
+                    "temporary": True,
+                    "badge_emoji": self.config.hget("config:pkmn_tourney:champion:badge_emoji"),
+                    "format_normal": self.config.hget("config:pkmn_tourney:champion:format")
+                })
+
+                await ctx.send("Member {} was registered as the new leader.".format(cur_champion_member))
+
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def set_champion_badge(self, ctx, badge_emoji: str):
+        self.config.hset("config:pkmn_tourney:champion", "badge_emoji", badge_emoji)
+
+        try:
+            cur_champion_id = self.config.hget("config:pkmn_tourney:champion", "user_id")
+            self.config.hset("config:pkmn_tourney:leaders:{}".format(cur_champion_id), "badge_emoji", badge_emoji)
+        except RedisError:
+            pass
+
+        await ctx.send("Badge emoji set to `{}`".format(badge_emoji))
+
+    @checks.is_pokemon_mod()
+    @league.command()
+    async def set_champion_format(self, ctx, *, format_msg: str):
+        self.config.hset("config:pkmn_tourney:champion", "format", format_msg)
+        try:
+            cur_champion_id = self.config.hget("config:pkmn_tourney:champion", "format")
+            self.config.hset("config:pkmn_tourney:leaders:{}".format(cur_champion_id), "format_normal", format_msg)
+        except RedisError:
+            pass
+
+        await ctx.send("Description set.")
+
+    @checks.is_pokemon_mod()
+    @league.command()
     async def mark_leader_inactive(self, ctx, member: discord.Member):
         """Mark a leader as inactive, hiding their unattained badge from badge cases."""
-        key = "config:pknn_tourney:leaders:{}".format(member.id)
+        key = "config:pkmn_tourney:leaders:{}".format(member.id)
         if self.config.exists(key):
             self.config.hset(key, "inactive", True)
             await ctx.send("Member marked inactive.",

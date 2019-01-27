@@ -1,7 +1,13 @@
 """don't uwu, $350 penalty"""
+
 import re
+
 import discord
+
+from discord import Color, DMChannel, Embed, Emoji, Member, Message
 from discord.ext import commands
+from discord.ext.commands import Bot, Context
+
 from .utils import checks
 from cogs.utils import rate_limits
 
@@ -10,7 +16,7 @@ class Uwuconomy:
 
     # active_guilds = [274731851661443074, 155800402514673664]
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.config = bot.config
 
@@ -20,11 +26,14 @@ class Uwuconomy:
         self.muted_contexts = list(self.config.smembers("config:uwuconomy:muted"))
 
     @property
-    def emoji(self):
-        return discord.utils.get(self.bot.get_guild(78716585996455936).emojis, name="350dollarpenalty")
+    def emoji(self) -> Emoji:
+        return discord.utils.get(
+            self.bot.get_guild(78716585996455936).emojis,
+            name="350dollarpenalty"
+        )
 
-    @commands.command(hidden=True, pass_context=True)
-    async def uwuconomy(self, ctx, *, user: discord.Member=None):
+    @commands.command(hidden=True)
+    async def uwuconomy(self, ctx: Context, *, user: Member=None) -> None:
         rate_limits.MemeCommand.check_rate_limit(ctx, 0, priority_blacklist=[319309336029560834])
         if not user:
             user = ctx.message.author
@@ -32,14 +41,14 @@ class Uwuconomy:
         fines = self.config.get("user:{}:uwuconomy".format(user.id))
         fines = 0 if not fines else int(fines)
 
-        embed = discord.Embed(color=discord.Color.blue(), description=("${}".format(-fines * 350)))
+        embed = Embed(color=Color.blue(), description=("${}".format(-fines * 350)))
 
         embed.set_author(name="{.display_name}'s current balance".format(user), icon_url=user.avatar_url)
         await ctx.send(embed=embed)
 
     @checks.sudo()
-    @commands.command(hidden=True, pass_context=True)
-    async def toggle_uwuconomy(self, ctx, bounds: str=None):
+    @commands.command(hidden=True)
+    async def toggle_uwuconomy(self, ctx: Context, bounds: str=None) -> None:
         """Toggle uwuconomy for a single channel"""
         if bounds in ["serverwide", "server"]:
             target = ctx.message.guild
@@ -70,7 +79,7 @@ class Uwuconomy:
 
     @checks.sudo()
     @commands.command(hidden=True)
-    async def toggle_uwuconomy_reactions(self, ctx, bounds: str=None):
+    async def toggle_uwuconomy_reactions(self, ctx: Context, bounds: str=None) -> None:
 
         name = "config:uwuconomy:muted"
 
@@ -87,16 +96,23 @@ class Uwuconomy:
 
         await ctx.send("uwuconomy reactions {} in {}.".format(action, target.name))
 
-    async def on_message(self, message):
-        if not isinstance(message.channel, discord.DMChannel) and \
-            (str(message.guild.id) in self.active_guilds or str(message.channel.id) in self.active_channels) \
-                and re.search("uwu", message.content, re.IGNORECASE) and not message.content.startswith("!uwu"):
-            if not (str(message.channel.id) in self.muted_contexts or str(message.guild.id) in self.muted_contexts):
+    async def on_message(self, message: Message) -> None:
+        if not isinstance(message.channel, DMChannel) and \
+            (
+                    str(message.guild.id) in self.active_guilds or
+                    str(message.channel.id) in self.active_channels
+            ) and \
+                re.search("uwu", message.content, re.IGNORECASE) and \
+                not message.content.startswith("!uwu"):
+            if not (
+                    str(message.channel.id) in self.muted_contexts or
+                    str(message.guild.id) in self.muted_contexts
+            ):
                 await message.add_reaction(self.emoji)
 
             self.config.incr("user:{}:uwuconomy".format(message.author.id))
             self.config.sadd("config:uwuconomy:tracked_users", message.author.id)
 
 
-def setup(bot):
+def setup(bot: Bot):
     bot.add_cog(Uwuconomy(bot))

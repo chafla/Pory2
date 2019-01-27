@@ -1,6 +1,9 @@
 import discord
+from discord.ext import commands
 from .utils import messages, checks
+import datetime
 import random
+import time
 
 
 terms_and_conditions_err = "That message should be posted in <#349198111345868801>. Sending it to me has no effect."
@@ -9,6 +12,7 @@ terms_and_conditions_err = "That message should be posted in <#34919811134586880
 class RPokemon:
     """
     Utility commands specifically for use in /r/Pokemon
+    Is this cog really only !egg now lmao
     """
 
     def __init__(self, bot):
@@ -33,10 +37,14 @@ class RPokemon:
 
     @staticmethod
     async def on_message(message):
-        if isinstance(message.channel, discord.DMChannel) and \
-                message.content.lower() == "i agree to the terms and conditions":
+        if isinstance(message.channel, discord.DMChannel):
+            if message.content.lower() == "i agree to the terms and conditions":
 
-            await message.channel.send(terms_and_conditions_err)
+                await message.channel.send(terms_and_conditions_err)
+
+            elif message.content.lower() == "i agree to the terms and conditions in #rules":
+
+                await message.channel.send("pls")
 
 
 def setup(bot):

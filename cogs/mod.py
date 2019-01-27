@@ -1,25 +1,32 @@
 """Moderating related commands"""
 
-from .utils import checks
-from discord.ext import commands
-import discord
-import re
 import datetime
+import re
+
+from typing import Dict, Optional
+
+import discord
+from discord import Color, Embed, Guild, Member, TextChannel
+
+from discord.ext import commands
+from discord.ext.commands import Context, Bot
+
+from .utils import checks
 
 
 class Timestamp:
 
-    def __init__(self, argument):
+    def __init__(self, argument: str) -> None:
         self.timestamp = str(argument)
         self.pieces = self.parse_timestamp(self.timestamp)
         if not self.pieces:
             raise commands.BadArgument("Incorrect timestamp format.")
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.timestamp
 
     @staticmethod
-    def parse_timestamp(timestamp):
+    def parse_timestamp(timestamp: str) -> Optional[Dict[str, int]]:
         """
         Take in a time in _d_h_m_s format.
 
@@ -48,18 +55,18 @@ class Timestamp:
 class RecurringTimeStamp(Timestamp):
     # TODO: improve this so it isn't just copy-pasted
 
-    def __init__(self, argument):
+    def __init__(self, argument: str) -> None:
         super().__init__(argument)
 
-    def __eq__(self, other):
+    def __eq__(self, other: datetime.datetime) -> bool:
         assert isinstance(other, datetime.datetime)
         return self.equals_datetime(self.timestamp, other)
 
-    def __ne__(self, other):
+    def __ne__(self, other: datetime.datetime) -> bool:
         return not self.__eq__(other)
 
     @staticmethod
-    def parse_timestamp(timestamp):
+    def parse_timestamp(timestamp: str) -> Optional[Dict[str, str]]:
         """
         Take in a time in _d_h_m_s format, similar to how cron operates.
 
@@ -94,7 +101,7 @@ class RecurringTimeStamp(Timestamp):
             return parts
 
     @staticmethod
-    def timestamp_to_datetime(timestamp):
+    def timestamp_to_datetime(timestamp: str) -> Optional[datetime.datetime]:
         """
         Take in a time in _d_h_m_s format and convert it to datetime
         Useful for one-off notifications
@@ -112,7 +119,7 @@ class RecurringTimeStamp(Timestamp):
                                                second=parts.get("s"))
 
     @staticmethod
-    def _get_dt_param(identifier, dt):
+    def _get_dt_param(identifier: str, dt: datetime.datetime) -> int:
         if identifier == "y":
             return dt.year
         elif identifier == "M":
@@ -129,11 +136,15 @@ class RecurringTimeStamp(Timestamp):
             return dt.second
 
     @staticmethod
-    def equals_datetime(timestamp, dt_obj):
-        """Check a split list of timestamp parts to see that they all match the current time."""
+    def equals_datetime(timestamp: str, dt_obj: datetime.datetime) -> bool:
+        """Check a split list of timestamp parts to
+        see that they all match the current time."""
         timestamp_parts = RecurringTimeStamp.parse_timestamp(timestamp)
+
         for identifier, num in timestamp_parts.items():
+
             dt_param = RecurringTimeStamp._get_dt_param(identifier, dt_obj)
+
             if "," in identifier:
                 for n in num.split(","):
                     if dt_param != int(n):
@@ -155,13 +166,19 @@ class RecurringTimeStamp(Timestamp):
 
 
 class DurationTimeStamp(Timestamp):
+    """
+    Timestamp used to represent a duration.
 
-    def __init__(self, argument):
+    Should only really be used in command processing, and then converted into a datetime object.
+    """
+
+    def __init__(self, argument: str) -> None:
         if argument in ["permanent", "perma"]:
             argument = "99y99M99d99h99m99s"  # Just make it arbitrarily large
         super().__init__(argument)
 
-    def to_datetime(self):
+    def to_timedelta(self) -> datetime.timedelta:
+        """Get the datetime of the timestamp in relation to now."""
         # Timedeltas cannot handle more than weeks, so we need to convert
         # We just change things to days to make things more straightforward
         now = datetime.datetime.utcnow()
@@ -182,15 +199,23 @@ class DurationTimeStamp(Timestamp):
                                 minutes=td_pieces.get("m", 0),
                                 seconds=td_pieces.get("s", 0))
 
-        return datetime.datetime.utcnow() + td
+        return td
 
-    def total_seconds(self):
-        return int((self.to_datetime() - datetime.datetime.utcnow()).total_seconds())
+    def to_datetime(self) -> datetime.datetime:
+        """
+        Get the datetime of the timedelta plus the current time.\
+        """
+
+        # Ignore this inspection, it returns the right thing (a datetime object)
+        return datetime.datetime.utcnow() + self.to_timedelta()
+
+    def total_seconds(self) -> int:
+        return int((self.to_timedelta() - datetime.datetime.utcnow()).total_seconds())
 
 
 class Mod:
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.config = bot.config
         # Create cache on startup so we don't have to ping the DB every second
@@ -200,30 +225,32 @@ class Mod:
             self._reminder_cache[rem["timestamp"]] = rem
 
     @property
-    def mod_server(self):
+    def mod_server(self) -> Guild:
         return self.bot.get_guild(146626123990564864)
 
     @property
-    def d_important(self):
+    def d_important(self) -> TextChannel:
         return self.bot.get_channel(395304906912825344)
         # return self.bot.get_channel(220209831200423936)  # #cd-2017important
         # return self.bot.get_channel(262993960035680256)  # Debug
 
     @property
-    def r_pkmn(self):
+    def r_pkmn(self) -> Guild:
         return self.bot.get_guild(111504456838819840)
 
     @property
-    def mod_tools_chan(self):
+    def mod_tools_chan(self) -> TextChannel:
         return self.bot.get_channel(246279583807045632)
 
-    async def add_mod_note(self, user_id, message):
+    async def add_mod_note(self, user_id: int, message: str) -> None:
         """Assign a modnote to `member` with message `message`"""
         await self.mod_tools_chan.send("%modnote add {} {}".format(user_id, message))
 
     @checks.sudo()
-    @commands.command(hidden=True, pass_context=True)
-    async def set_reminder(self, ctx, timestamp: RecurringTimeStamp, *, message: str):
+    @commands.command(hidden=True)
+    async def set_reminder(
+            self, ctx: Context, timestamp: RecurringTimeStamp, *, message: str
+    ) -> None:
         """
         Take in a time in _d_h_m_s format, similar to how cron operates.
 
@@ -269,98 +296,27 @@ class Mod:
 
         await ctx.send("\N{OK HAND SIGN}")
 
-    @checks.is_pokemon_mod()
-    @commands.group(hidden=True)
-    async def roleban(self, ctx):
-        pass
-
-    @checks.is_pokemon_mod()
-    @roleban.command(hidden=True, aliases=["apply"])
-    async def ban(self, ctx, target: discord.Member, role_name: str, duration: DurationTimeStamp, *,
-                  reason: str="None given."):
-        """Role-ban a user for a specified time."""
-        valid_roles = ["mature", "anime", "subnews", "politics", "earnest"]
-        if role_name in ["set18, set_18, mature"]:
-            role_name = "mature"
-
-        if role_name not in valid_roles:
-            await ctx.send("Invalid role name. Possible roles are {}.".format(", ".join(valid_roles)))
-            return
-        elif target is None:
-            await ctx.send("Member not found.")
-            return
-        else:
-
-            # Send a message, send a mod note and create a server log note
-            if discord.utils.get(target.roles, name=role_name):
-                await target.remove_roles(discord.utils.get(target.roles, name=role_name),
-                                          reason="Removed due to blacklisting user.")
-
-            # Just make it permanent if it's too huge
-            total_wait = duration.total_seconds() if duration.pieces.get("y", 0) < 50 else None
-            self.config.set("user:{}:role_blacklist:{}".format(target.id, role_name), str(duration), ex=total_wait)
-
-            server_logs = self.bot.get_cog("ServerLogs")
-            if server_logs:
-                await server_logs.handle_external_embed(ctx, "was role-banned from {}.".format(role_name),
-                                                        priority=True,
-                                                        member=target,
-                                                        **{"Moderator responsible": ctx.message.author.name,
-                                                           "Reason": reason,
-                                                           "Duration": str(duration)})
-
-            await self.add_mod_note(target.id, "[BOT] Role-banned from {} for {} with reason: `{}`.".format(
-                role_name, str(duration), reason))
-            await ctx.send()
-
-    @checks.is_pokemon_mod()
-    @roleban.command(hidden=True, aliases=["cancel", "revoke", "unban"])
-    async def remove(self, ctx, target: discord.Member, role_name: str, *, reason: str="None given."):
-        """Cancel a user's role-ban."""
-        valid_roles = ["mature", "anime", "subnews", "politics"]
-        if role_name in ["set18, set_18, mature"]:
-            role_name = "mature"
-
-        if role_name not in valid_roles:
-            await ctx.send("Invalid role name. Possible roles are {}.".format(", ".join(valid_roles)))
-            return
-        elif target is None:
-            await ctx.send("Member not found.")
-            return
-        duration = DurationTimeStamp(self.config.get("user:{}:role_blacklist:{}".format(target.id, role_name)))
-        self.config.delete("user:{}:role_blacklist:{}".format(target.id, role_name))
-        server_logs = self.bot.get_cog("ServerLogs")
-        if server_logs:
-            await server_logs.handle_external_embed(ctx,
-                                                    "had role-ban for {} removed.".format(role_name),
-                                                    priority=True,
-                                                    **{"Moderator responsible": ctx.message.author.name,
-                                                       "Reason": reason})
-
-        await self.add_mod_note(target.id, "[BOT] Role-ban from {} for {} was removed with reason: `{}`".format(
-            role_name, str(duration), reason))
-
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def list_reminders(self, ctx):
+    @commands.command()
+    async def list_reminders(self, ctx: Context) -> None:
         output = []
         for key in self.config.scan_iter("config:mod:reminders*"):
             reminder_data = self.config.hgetall(key)
             output.append("**{}**: {}".format(reminder_data["timestamp"], reminder_data["message"]))
-        embed = discord.Embed(description="\n".join(output), color=discord.Color.blue())
+        embed = Embed(description="\n".join(output), color=Color.blue())
         embed.set_author(name="Current active reminders")
         await ctx.send(embed=embed)
 
     @checks.sudo()
-    @commands.command(hidden=True, pass_context=True)
-    async def clear_all_reminders(self, ctx):
+    @commands.command()
+    async def clear_all_reminders(self, ctx: Context) -> None:
         [self.config.delete(i) for i in self.config.scan_iter("config:mod:reminders*")]
         self._reminder_cache = {}
         await ctx.send("\N{OK HAND SIGN}")
 
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def del_reminder(self, ctx, timestamp: str):
+    @commands.command()
+    async def del_reminder(self, ctx: Context, timestamp: str) -> None:
         """Delete an existing reminder."""
         if self.config.exists("config:mod:reminders:{}".format(timestamp)):
             self.config.delete("config:mod:reminders:{}".format(timestamp))
@@ -369,7 +325,7 @@ class Mod:
         else:
             await ctx.send("Reminder `{}` not found.".format(timestamp))
 
-    async def on_member_update(self, before, after):
+    async def on_member_update(self, before: Member, after: Member) -> None:
         invalid_nicks = ["everyone", "here", "mods", "bot dev team", "admin", "general moderator",
                          "franchise moderator", "topic moderator", "voice moderator", "mod in training (mit)",
                          "regular manager"]
@@ -378,9 +334,9 @@ class Mod:
             if stripped_nick in invalid_nicks:
                 await after.edit(reason="Invalid name set: ({})".format(after.nick), nick=None)
                 await after.send("In order to reduce abuse, your nickname has been reset.")
-                await self.add_mod_note(after, "[BOT] Set nickname to {}, reset automatically.".format(after.nick))
+                await self.add_mod_note(after.id, "[BOT] Set nickname to {}, reset automatically.".format(after.nick))
 
-    async def on_timer_update(self, secs):
+    async def on_timer_update(self, secs: int) -> None:
         # Every 10 seconds, check to see if the event matches the current time
         # If so, trigger.
         for ts in self._reminder_cache:
@@ -388,13 +344,18 @@ class Mod:
             now = datetime.datetime.now()
             if rem_dt == now:
                 active_reminder = self._reminder_cache[ts]
-                embed = discord.Embed(description=active_reminder["message"],
-                                      color=discord.Color.blue())
-                embed.set_author(name="Reminder",
-                                 icon_url="https://emojipedia-us.s3.amazonaws.com/thumbs/160/twitter/31/alarm-clock_23f0.png")
+                embed = Embed(description=active_reminder["message"],
+                              color=Color.blue())
+                embed.set_author(
+                    name="Reminder",
+                    icon_url="https://emojipedia-us.s3.amazonaws.com/thumbs/"
+                             "160/twitter/31/alarm-clock_23f0.png"
+                )
                 embed.set_footer(text="Timestamp: {}".format(ts))
-                await self.d_important.send(embed=embed, content=active_reminder.get("extra_pings"))
+                await self.d_important.send(
+                    embed=embed, content=active_reminder.get("extra_pings")
+                )
 
 
-def setup(bot):
+def setup(bot: Bot) -> None:
     bot.add_cog(Mod(bot))

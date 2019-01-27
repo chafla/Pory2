@@ -1,21 +1,27 @@
 """Role management for voice channels."""
 
+from asyncio import sleep
+
 import discord
 
+from discord import Member
 from discord.ext import commands
+from discord.ext.commands import Bot, Context
+
 from .utils import checks
-from asyncio import sleep
 
 
 class VoiceRoles:
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.config = bot.config
 
     @checks.sudo()
     @commands.command(hidden=True)
-    async def set_voice_role(self, ctx, role_id: str, channel_id: str=None):
+    async def set_voice_role(
+            self, ctx: Context, role_id: str, channel_id: str=None
+    ) -> None:
         """Set a certain role as the 'in voice' role for the server.
 
         Channel_id can be included to set a specific voice role for a channel.
@@ -52,7 +58,7 @@ class VoiceRoles:
         await self.config.put("voice_roles", role_pairs)
 
     @staticmethod
-    async def add_role(member, role_id):
+    async def add_role(member: Member, role_id: int) -> bool:
         role = discord.utils.get(member.server.roles, id=role_id)
         if not role:
             return False
@@ -64,7 +70,7 @@ class VoiceRoles:
                 return False
 
     @staticmethod
-    async def remove_role(member, role_id):
+    async def remove_role(member: Member, role_id: int) -> bool:
         # Has to be forceful because the member object usually isn't updated
         role = discord.utils.get(member.server.roles, id=role_id)
 
@@ -76,7 +82,7 @@ class VoiceRoles:
         except IndexError:
             return True
 
-    async def on_voice_state_update(self, before, after):
+    async def on_voice_state_update(self, before: Member, after: Member) -> None:
         role_settings = self.config.get("voice_roles").get(before.guild.id)
         server_role_cfg = role_settings.get(before.guild.id)
         if not server_role_cfg:
@@ -98,6 +104,8 @@ class VoiceRoles:
                 return
             # TODO: Note that this might not work
             try:
+                # Way back when I did this, I had to edit the cache because it
+                # wasn't updating the roles.
                 await self.remove_role(after, before_role_id)  # Might not work, but we'll just swallow that
                 await sleep(0.5)  # Rate limit considerations
                 await self.add_role(after, after_role_id)
@@ -109,5 +117,5 @@ class VoiceRoles:
                 await self.remove_role(after, before_role_id)
 
 
-def setup(bot):
+def setup(bot: Bot) -> None:
     bot.add_cog(VoiceRoles(bot))
