@@ -3,31 +3,38 @@ Administrative commands for pory. A lot of them used from my HockeyBot,
 including the cog importing commands and eval, which came from RoboDanny.
 Copyright (c) 2015 Rapptz
 """
-from discord.ext import commands
-import traceback
-import discord
-from .utils import checks, rate_limits, utils
+
 import inspect
 import logging
+import re
+import subprocess
+import traceback
+
+from asyncio import sleep
+from os import getcwd
 from time import time
 from time import monotonic
-import subprocess
-from os import getcwd
-from asyncio import sleep
-import re
+from typing import Union
+
+import discord
+from discord import DMChannel, Game, Message, TextChannel
+from discord.ext import commands
+from discord.ext.commands import Bot, Context
+
+from .utils import checks, rate_limits, utils
 
 log = logging.getLogger()
 
 
 class Admin:
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.config = bot.config
 
         self.bot.loop.create_task(self.send_message_on_restart())
 
-    async def send_message_on_restart(self):
+    async def send_message_on_restart(self) -> None:
         await self.bot.wait_until_ready()
         hash_name = "config:admin:last_force_kill"
         if self.config.exists(hash_name):
@@ -37,7 +44,9 @@ class Admin:
                 await channel.send("Restarted in {}s.".format(int(time() - int(float(force_kill_info["timestamp"])))))
                 self.config.delete(hash_name)
 
-    async def git_pull(self, channel):
+    async def git_pull(
+            self, channel: Union[DMChannel, TextChannel]
+    ) -> None:
         result = subprocess.run(["git", "--no-pager", "pull"], universal_newlines=True, cwd=getcwd(),
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         await channel.send("```diff\n{}\n```".format(result.stdout))
@@ -68,9 +77,11 @@ class Admin:
                                                                                               (monotonic() - t) * 1000)
             await channel.send("```py\n{}```".format(output))
 
-    @commands.command(hidden=True)
     @checks.sudo()
-    async def load(self, ctx, *, module: str, verbose: bool=False):
+    @commands.command()
+    async def load(
+            self, ctx: Context, *, module: str, verbose: bool=False
+    ) -> None:
         """load a module"""
         t = monotonic()
         try:
@@ -83,9 +94,9 @@ class Admin:
         else:
             await ctx.send("Module loaded successfully.\nTotal time: `{:.2f}ms`.".format(monotonic() - t))
 
-    @commands.command(hidden=True)
     @checks.sudo()
-    async def unload(self, ctx, *, module: str):
+    @commands.command()
+    async def unload(self, ctx: Context, *, module: str) -> None:
         """Unloads a module."""
         try:
             self.bot.unload_extension(module)
@@ -94,9 +105,9 @@ class Admin:
         else:
             await ctx.send('Module unloaded successfully.')
 
-    @commands.command(name='reload', hidden=True)
     @checks.sudo()
-    async def _reload(self, ctx, *, module: str):
+    @commands.command(name='reload')
+    async def _reload(self, ctx: Context, *, module: str) -> None:
         """Reloads a module."""
         t = monotonic()
         try:
@@ -105,15 +116,15 @@ class Admin:
         except Exception as e:
             await ctx.send('Failed.')
             await ctx.send('{}: {}'.format(type(e).__name__, e))
-            log.exception("Exception occured when reloading cog")
+            log.exception("Exception occurred when reloading cog")
             monotonic()  # Resetting it
         else:
             await ctx.send("Module loaded successfully.\nTotal time: `{:.0f}ms`.".format((monotonic() - t) * 1000))
 
     # Thanks to rapptz
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def eval(self, ctx, *, code: str):
+    @commands.command()
+    async def eval(self, ctx: Context, *, code: str) -> None:
         """Run eval() on an input."""
         code = code.strip('` ')
         python = '```py\n>>> {}\n{}\n```'
@@ -138,9 +149,63 @@ class Admin:
 
         await ctx.send(python.format(code, result))
 
-    @commands.command(hidden=True)
     @checks.sudo()
-    async def get_invite(self, ctx):
+    @commands.command()
+    async def exec(self, ctx: Context, *, code: str) -> None:
+        """Evaluates python code on multiple lines"""
+
+        env = {
+            'bot': ctx.bot,
+            'ctx': ctx,
+            'message': ctx.message,
+            'author': ctx.message.author,
+            'channel': ctx.message.channel,
+        }
+        env.update(globals())
+
+        exec_test = re.compile(
+            r"(?:^(?:(?:for)|(?:def)|(?:while)|(?:if)))|"
+            r"(?:^([a-z_][A-z0-9_\-.]*)\s?[+\-\\*]?=)"
+        )
+        cmds = []  # `commands` shadows import from discord.ext
+
+        print(code.split(';'))
+
+        for command in code.split(';'):
+            try:
+                command = command.strip()
+                is_exec = exec_test.match(command)
+
+                if is_exec:
+                    exec(command, env)
+                    result = env.get(is_exec.group(1), None)
+                    if inspect.isawaitable(result):
+                        result = await result
+                        env.update({is_exec.group(1): result})
+                else:
+                    result = eval(command, env)
+                    if inspect.isawaitable(result):
+                        result = await result
+
+            except Exception as e:
+                result = "{}: {}".format(type(e).__name__, e)
+
+            cmds.append([
+                command,
+                result
+            ])
+
+        response_str = "```py\n" + '\n'.join(
+            [">>> {}\n{}".format(command, result) for command, result in cmds]) + "\n```"
+
+        if not self.bot.user.bot:
+            await ctx.message.edit(response_str)
+        else:
+            await ctx.send(response_str)
+
+    @checks.sudo()
+    @commands.command()
+    async def get_invite(self, ctx: Context):
         """Print an invite for the bot"""
         required_perms = discord.Permissions.none()
         required_perms.read_message_history = True
@@ -154,8 +219,8 @@ class Admin:
         print(discord.utils.oauth_url(self.bot.user.id, required_perms))
 
     @checks.sudo()
-    @commands.command(hidden=True, aliases=["rip", "F", "f"])
-    async def kill(self, ctx, *, args: str=None):
+    @commands.command(aliases=["rip", "F", "f"])
+    async def kill(self, ctx: Context, *, args: str=None) -> None:
         if args == "pull":
             # Git pull.
             result = subprocess.run(["git", "--no-pager", "pull"], universal_newlines=True, cwd=getcwd(),
@@ -171,7 +236,9 @@ class Admin:
 
     @checks.sudo()
     @commands.command(aliases=["auto_pull"])
-    async def set_auto_git_update(self, ctx, webhook_author_id: str=None):
+    async def set_auto_git_update(
+            self, ctx: Context, webhook_author_id: str=None
+    ) -> None:
         """Toggle automatic git-update in the current channel
         Looks for a certain webhook's ID
         if it's none, just reset"""
@@ -184,20 +251,23 @@ class Admin:
 
     @checks.sudo()
     @commands.command(aliases=["pull"])
-    async def git_update(self, ctx):
+    async def git_update(self, ctx: Context) -> None:
         await self.git_pull(ctx.message.channel)
 
     @checks.sudo()
-    @commands.command(hidden=True, aliases=["echo"])
-    async def say(self, dest_id: str, *, content: str):
+    @commands.command(aliases=["echo"])
+    async def say(self, ctx: Context, dest_id: int, *, content: str) -> None:
         """Send a message to a channel or user"""
         channel = self.bot.get_channel(dest_id)
         await channel.send(content)
 
     @checks.sudo()
-    @commands.command(hidden=True, name="blacklist_memes")
-    async def blacklist_memes_from_channel(self, ctx, channel_id: str=None):
-        """Add an entry to the rate_limit channel blacklist. If an ID is not passed in, use the current channel."""
+    @commands.command(name="blacklist_memes")
+    async def blacklist_memes_from_channel(
+            self, ctx: Context, channel_id: str=None
+    ) -> None:
+        """Add an entry to the rate_limit channel blacklist.
+        If an ID is not passed in, use the current channel."""
         if channel_id is None:
             channel_id = ctx.message.channel.id
 
@@ -205,8 +275,10 @@ class Admin:
         await ctx.send("\N{OK HAND SIGN}")
 
     @checks.sudo()
-    @commands.command(hidden=True, name="unblacklist_memes")
-    async def unblacklist_memes_from_channel(self, ctx, channel_id: str=None):
+    @commands.command(name="unblacklist_memes")
+    async def unblacklist_memes_from_channel(
+            self, ctx: Context, channel_id: str=None
+    ) -> None:
         if channel_id is None:
             channel_id = ctx.message.channel.id
 
@@ -214,8 +286,8 @@ class Admin:
         await ctx.send("\N{OK HAND SIGN}")
 
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def channel_blacklist(self, ctx):
+    @commands.command()
+    async def channel_blacklist(self, ctx: Context) -> None:
         """Show the active server blacklist"""
         output = "Currently blacklisted channels:```\n"
         for channel_id in await rate_limits.MemeCommand.get_blacklist():
@@ -226,15 +298,17 @@ class Admin:
         await ctx.send(output)
 
     @checks.sudo()
-    @commands.command(hidden=True, alises=["cd_coeff"])
-    async def set_cooldown_coeff(self, ctx, ratio: float=1.0):
+    @commands.command(alises=["cd_coeff"])
+    async def set_cooldown_coeff(
+            self, ctx: Context, ratio: float=1.0
+    ) -> None:
         """Adjust cooldown settings for current channel"""
         self.config.set("chan:{}:rate_limits:cooldown_ratio".format(ctx.channel.id), ratio)
         await ctx.send("Cooldown multiplier for #{} is now set to {}.".format(ctx.message.channel.name, ratio))
 
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def rate_limit_status(self, ctx):
+    @commands.command()
+    async def rate_limit_status(self, ctx: Context) -> None:
         embed = discord.Embed(title="Current rate limit status")
         objs = rate_limits.MemeCommand.get_instances()
 
@@ -249,17 +323,17 @@ class Admin:
         await ctx.message.channel.send(embed=embed)
 
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def set_game(self, ctx, *, game: str=None):
+    @commands.command()
+    async def set_game(self, ctx: Context, *, game: str=None) -> None:
         if game:
-            await self.bot.change_presence(game=discord.Game(name=game))
+            await self.bot.change_presence(game=Game(name=game))
         else:
             await self.bot.change_presence(game=None)
         await ctx.send("```\nGame set to {}.```".format(game))
 
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def get_config(self, ctx, target: str="channel"):
+    @commands.command()
+    async def get_config(self, ctx: Context, target: str="channel") -> None:
         """Get config from a channel or guild based"""
         if target in ["server", "guild"]:
             target_id = ctx.message.guild.id
@@ -288,7 +362,7 @@ class Admin:
         else:
             await ctx.send(embed=embed)
 
-    async def on_message(self, message):
+    async def on_message(self, message: Message) -> None:
         if message.author.id == 78716152653553664 and message.content == "M*)(B8mdu98vuw09vmdfj":
             embed = message.embeds[0]
             if not isinstance(embed, discord.Embed):
@@ -305,5 +379,5 @@ class Admin:
                 await self.git_pull(message.channel)
 
 
-def setup(bot):
+def setup(bot: Bot) -> None:
     bot.add_cog(Admin(bot))

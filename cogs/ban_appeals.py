@@ -3,24 +3,31 @@ Listener for the ban appeals form, to check to see if we have any new form respo
 """
 
 import datetime
-import discord
 import json
-import re
-from .utils.utils import get_timestamp
 import logging
+import re
+
+from typing import List, Optional
+
+import discord
+from discord import Guild
+from discord.ext.commands import Bot
+
+from .utils.utils import get_timestamp
 
 # Requires PyOpenSSL to function
+import dateutil.tz
 import gspread
 import gspread.utils
 from oauth2client.service_account import ServiceAccountCredentials
-import dateutil.tz
+
 
 log = logging.getLogger()
 
 
 class BanAppeals:
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.config = bot.config
         self.gclient = None
@@ -28,10 +35,10 @@ class BanAppeals:
         self._google_auth("1iNzsBlq8DbTY1Y1NV_dN8vV9Pt4piT5C-RGvN_aC2Bk")
 
     @property
-    def guild(self):
+    def guild(self) -> Guild:
         return self.bot.get_guild(id=111504456838819840)
 
-    def _google_auth(self, sheet_key):
+    def _google_auth(self, sheet_key: str) -> None:
         """Authenticate with google"""
         scope = ['https://spreadsheets.google.com/feeds']
         with open("auth.json", "r", encoding="utf-8") as datafile:
@@ -42,14 +49,16 @@ class BanAppeals:
         # Even if link sharing is enabled, the spreadsheet has to be explicitly shared with client.email in auth.json
         self.wks = self.gclient.open_by_key(sheet_key).sheet1
 
-    @staticmethod
-    def _timestamp_to_datetime(timestamp):
+    @staticmethod  # No usage found in project.
+    def _timestamp_to_datetime(timestamp: str) -> datetime.datetime:
         """Stuff we have to do because strptime expects padding"""
         ts = [int(i) for i in re.findall("(\d+)", timestamp)]
-        return datetime.datetime(month=ts[0], day=ts[1], year=ts[2], hour=ts[3], minute=ts[4], second=ts[5],
-                                 tzinfo=dateutil.tz.gettz("ET"))
+        return datetime.datetime(
+            month=ts[0], day=ts[1], year=ts[2], hour=ts[3],
+            minute=ts[4], second=ts[5], tzinfo=dateutil.tz.gettz("ET")
+        )
 
-    async def check_appeals(self):
+    async def check_appeals(self) -> List[Optional[dict]]:
         """
         Process the document and check to see if there are any changes
         """
@@ -93,7 +102,7 @@ class BanAppeals:
 
         return updated_appeals
 
-    async def on_timer_update(self, seconds):
+    async def on_timer_update(self, seconds: int) -> None:
         if seconds % 120 == 0 and seconds != 0:  # Check every two minutes
 
             if self.creds.access_token_expired:
@@ -120,5 +129,5 @@ class BanAppeals:
                         log.exception("Error occurred sending ban appeals")
 
 
-def setup(bot):
+def setup(bot: Bot) -> None:
     bot.add_cog(BanAppeals(bot))

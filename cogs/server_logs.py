@@ -5,7 +5,7 @@ from .utils import checks, utils
 import discord
 from .utils.utils import get_timestamp, download_image
 import logging
-from asyncio import TimeoutError, sleep
+from asyncio import TimeoutError
 from io import BytesIO
 from asyncio import sleep
 
@@ -43,11 +43,15 @@ class ServerLogs:
     def __init__(self, bot):
         self.bot = bot
         self.config = bot.config
-        self._config_cache = {}
-
+        cache = {}
         for key in self.config.scan_iter("config:mod:config*"):
             *_, guild_id = key.split(":")
-            self._config_cache[int(guild_id)] = self.config.hgetall(key)
+            try:
+                cache[int(guild_id)] = self.config.hgetall(key)
+            except TypeError:
+                # Guild ID not found
+                self.config.delete(key)
+        self._config_cache = cache
 
     @property
     def active_guilds(self):
@@ -172,16 +176,24 @@ class ServerLogs:
 
     async def on_member_ban(self, guild, user):
         if self._is_tracked(guild, priority_event=True):
-            priority_modlog = self.bot.get_channel(self._config_cache[guild.id]["priority_modlog"])
-            await priority_modlog.send("Member {} was banned".format(user.name))  # temporary failsafe
+            priority_modlog = self.bot.get_channel(int(self._config_cache[guild.id]["priority_modlog"]))
+            try:
+                await priority_modlog.send("Member {} was banned".format(user.name))  # temporary failsafe
+            except AttributeError:  # Modlog is None
+                log.exception("Could not send to non-existent modlog.")
 
             embed = discord.Embed(title="User {} was banned.".format(str(user)),
                                   color=colors["ban"])
 
             embed = self.format_embed(embed, user)
             embed = self.add_case_number(embed)
-
-            mod_responsible, reason = await self._get_last_audit_action(discord.AuditLogAction.ban, guild.id, user)
+            try:
+                mod_responsible, reason = await self._get_last_audit_action(guild.id, discord.AuditLogAction.ban, user)
+            except discord.Forbidden:
+                mod_log_config = self.get_guild_config(guild.id)
+                mod_log_chan = self.bot.get_channel(int(mod_log_config["priority_modlog"]))
+                await mod_log_chan.send("Missing audit log perms, I cannot fetch the latest ban info.")
+                return
 
             # Add reason
 
@@ -197,7 +209,7 @@ class ServerLogs:
             embed = self.format_embed(embed, user)
             embed = self.add_case_number(embed)
 
-            mod_responsible, reason = await self._get_last_audit_action(discord.AuditLogAction.unban, guild.id, user)
+            mod_responsible, reason = await self._get_last_audit_action(guild.id, discord.AuditLogAction.unban, user)
 
             embed.add_field(name="Reason", value=reason if reason else "None given.")
             embed.add_field(name="Mod responsible", value=mod_responsible.name if mod_responsible else "unknown")
@@ -222,36 +234,63 @@ class ServerLogs:
 
             leave_was_kick = False
 
-            await sleep(0.5)
+            await sleep(1)
 
             # Check to see if the leave was a kick or just a regular leave
+            try:
+                for log_entry in await member.guild.audit_logs(action=discord.AuditLogAction.kick, limit=1).flatten():
+                    # Let's stop at the first entry.
+                    if log_entry.target.id == member.id:  # The leave was a kick
+                        leave_was_kick = True
+                        try:
+                            mod_responsible = getattr(log_entry, "user", "Unknown")
+                            reason = getattr(log_entry, "reason", "No reason provided.")
+                            embed = discord.Embed(title="User {0} was kicked.".format(str(member)),
+                                                  color=colors["kick"])
 
-            for log_entry in await member.guild.audit_logs(action=discord.AuditLogAction.kick, limit=1).flatten():
-                # Let's stop at the first entry.
-                if log_entry.target.id == member.id:  # The leave was a kick
-                    leave_was_kick = True
-                    try:
-                        mod_responsible = getattr(log_entry, "user", "Unknown")
-                        reason = getattr(log_entry, "reason", "No reason provided.")
-                        embed = discord.Embed(title="User {0} was kicked.".format(str(member)),
-                                              color=colors["kick"])
+                            embed.add_field(name="Reason", value=reason)
+                            embed.add_field(name="Kicked by", value=mod_responsible)
+                            break
+                        except AttributeError:
+                            pass
 
-                        embed.add_field(name="Reason", value=reason)
-                        embed.add_field(name="Kicked by", value=mod_responsible)
-                        break
-                    except AttributeError:
-                        pass
-
-            else:
-                embed = discord.Embed(title="User {0} left.".format(str(member)),
-                                      color=colors["leave"])
+                else:
+                    embed = discord.Embed(title="User {0} left.".format(str(member)),
+                                          color=colors["leave"])
+            except discord.Forbidden:
+                mod_log_channel_id = self.get_guild_config(member.guild)["default_modlog"]
+                modlog_chan = self.bot.get_channel(int(mod_log_channel_id))
+                await modlog_chan.send("I'm missing audit log permissions, so ban and kick tracking won't work.")
+                return
 
             embed = self.format_embed(embed, member)
+            roles = ", ".join((i.name for i in member.roles))
+            embed = embed.add_field(name="Roles", value=roles)
 
             await self.send_embed_to_modlog(embed, member.guild, priority=leave_was_kick)
 
     async def on_message_delete(self, message):
         if self._is_tracked(message.guild):
+
+            default_modlog_id = self._config_cache[message.guild.id].get("default_modlog")
+
+            # If the message was deleted from the modlog, make note of it but don't re-upload the deleted message.
+            if message.channel.id == default_modlog_id:
+
+                if message.embeds:
+                    # Just pull the title of the first embed, if it exists
+                    original_msg = message.embeds[0].title
+                else:
+                    original_msg = None
+
+                embed = discord.Embed(title="Modlog message deleted.",
+                                      description="Original message: '{}'".format(original_msg) if original_msg else "",
+                                      color=colors["delete"])
+
+                embed = self.format_embed(embed, message.author)
+                await self.send_embed_to_modlog(embed, message.guild.id)
+                return
+
             reupload = None
             member = message.author
             embed = discord.Embed(title="Message by {0.name}#{0.discriminator} deleted.".format(member),

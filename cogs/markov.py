@@ -1,15 +1,23 @@
 """Markov generating and handling code"""
+
+import json
+import logging
+
+from inspect import iscoroutinefunction
+from io import StringIO
+from typing import Any, Callable, Optional, Union  # , Coroutine
+
+import discord
 import markovify
+
+from discord import Guild, Member, Role
+from discord.ext import commands
+from discord.ext.commands import Bot, Context
+
 from .utils import markov2, utils, checks
 from .utils.rate_limits import MemeCommand
-import discord
-from discord.ext import commands
 from .utils import gizoogle
-from io import StringIO
-import json
-from inspect import iscoroutinefunction
 
-import logging
 
 """
 class MarkovifyTextList(markovify.Text):
@@ -18,12 +26,13 @@ class MarkovifyTextList(markovify.Text):
         return text
 """
 
+
 log = logging.getLogger()
 
 
 class Markov:
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.config = bot.config
         self.currently_generating = []
@@ -31,14 +40,14 @@ class Markov:
         self._lewdmarkov_model = None
 
     @property
-    def r_pkmn(self):
+    def r_pkmn(self) -> Guild:
         return self.bot.get_guild(111504456838819840)
 
     @property
-    def verified_role(self):
+    def verified_role(self) -> Role:
         return discord.utils.get(self.r_pkmn.roles, id=349077573977899011)
 
-    def _is_verified(self, ctx):
+    def _is_verified(self, ctx: Context) -> bool:
         if isinstance(ctx.message.channel, discord.DMChannel):  # actually a user, meaning it's in DMs
             return True
         elif ctx.message.author.guild == self.r_pkmn:
@@ -46,7 +55,7 @@ class Markov:
         else:
             return self.config.get("user:{}:logs:enabled".format(ctx.message.author.id)) is True
 
-    async def check_verification(self, ctx):
+    async def check_verification(self, ctx: Context) -> bool:
         verification = self._is_verified(ctx)
         if verification:
             return True
@@ -58,7 +67,7 @@ class Markov:
                                           "Porygon2 `!allow_logging`.")
             return False
 
-    async def _generate_lewdmarkov_model(self):
+    async def _generate_lewdmarkov_model(self) -> None:
         # I tried working with this method, but it would just hang the bot. Probably put too much load on it.
         try:
             with open(r'cogs/utils/loodmarkov_model.json', 'r', encoding='utf-8') as g:
@@ -70,7 +79,7 @@ class Markov:
             log.warning("Count not find markov file.")
             return
 
-    async def _get_member(self, ctx, user=None):
+    async def _get_member(self, ctx: Context, user: str=None) -> Optional[Member]:
         message = ctx.message
 
         if len(message.mentions) > 0:
@@ -81,8 +90,10 @@ class Markov:
             # Check if the username matches exactly, then if it's like the start of a display_name
             member = discord.utils.get(message.guild.members, name=user)
             if member is None:
-                member = discord.utils.find(lambda m: m.display_name.startswith(user),
-                                            self.bot.get_all_members())
+                member = discord.utils.find(
+                    lambda m: m.display_name.startswith(user),
+                    self.bot.get_all_members()
+                )
                 if member is None:
                     await ctx.send("User not found.")
                     return
@@ -95,8 +106,20 @@ class Markov:
 
         return member
 
-    async def gen_markov(self, ctx, markov_type=None, user=None, path=None, modifier_func=None, use_newlines=True,
-                         state_size=2):
+    async def gen_markov(
+            self, ctx: Context,
+            markov_type: str=None,
+            user: str=None,
+            path: Union[str, StringIO]=None,
+            modifier_func: Optional[
+                Union[
+                    Callable[[str], Union[str, Any]]
+                ]
+            ]=None,
+            use_newlines: bool=True,
+            state_size: int=2
+    ) -> None:
+        # `Any]]` above is `Coroutine[None, None, str]]]`
         assert path is not None or markov_type is not None
         old_lib = False
         if use_newlines:
@@ -173,7 +196,7 @@ class Markov:
             g.close()
 
     @staticmethod
-    def _create_multi_markov(*member_ids):
+    def _create_multi_markov(*member_ids: int) -> Optional[str]:
         """
         Combine multiple models to create a markov based on different files.
         Might be slow.
@@ -182,8 +205,9 @@ class Markov:
 
         for user_id in member_ids:
             try:
-                g = (open("message_cache/users/{0}.txt".format(user_id), "r", encoding="utf-8")).read()
-                models.append(markovify.NewlineText(g, state_size=2))
+                with open("message_cache/users/{0}.txt".format(user_id), "r", encoding="utf-8") as f:
+                    models.append(markovify.NewlineText(f.read(), state_size=2))
+
             except FileNotFoundError:
                 pass
 
@@ -192,61 +216,63 @@ class Markov:
             return combined_model.make_sentence(tries=5000)
 
     @commands.command(enabled=False, hidden=True)
-    async def otmarkov(self, ctx):
+    async def otmarkov(self, ctx: Context) -> None:
         if MemeCommand.check_rate_limit(ctx, 60):
             await self.gen_markov(ctx, "otmarkov")
 
     @commands.command(enabled=False, hidden=True, aliases=["newmarkov"])
-    async def genmarkov(self, ctx):
+    async def genmarkov(self, ctx: Context) -> None:
         if MemeCommand.check_rate_limit(ctx, 60):
             await self.gen_markov(ctx, "genmarkov")
 
     @commands.command(enabled=False, hidden=True)
-    async def oldmarkov(self, ctx):
+    async def oldmarkov(self, ctx: Context) -> None:
         if MemeCommand.check_rate_limit(ctx, 60):
             await self.gen_markov(ctx, "oldmarkov")
 
     @commands.command(hidden=True)
-    async def gizmarkov(self, ctx):
+    async def gizmarkov(self, ctx: Context) -> None:
         if MemeCommand.check_rate_limit(ctx, 60, cooldown_group="usermarkov"):
             await self.gen_markov(ctx, "usermarkov", modifier_func=gizoogle.String.translate)
 
     @commands.command(hidden=True)
-    async def fhyrmarkov(self, ctx):
-        MemeCommand.check_rate_limit(ctx, 60, "usermarkov")
+    async def fhyrmarkov(self, ctx: Context) -> None:
+        MemeCommand.check_rate_limit(ctx, 60, cooldown_group="usermarkov")
         await self.gen_markov(ctx, "usermarkov", modifier_func=utils.generate_fhyr_text)
 
     @commands.command(hidden=True)
-    async def beemarkov(self, ctx):
+    async def beemarkov(self, ctx: Context) -> None:
         """not the bees"""
         if MemeCommand.check_rate_limit(ctx, 60):
             await self.gen_markov(ctx, path="text_sources/bee_movie.txt")
 
     @commands.command()
-    async def markovoftheentireworld(self, ctx):
+    async def markovoftheentireworld(self, ctx: Context) -> None:
         if MemeCommand.check_rate_limit(ctx, 60):
             await self.gen_markov(ctx, path="text_sources/history_of_entire_world.txt")
 
-    @commands.command(pass_context=True)
-    async def markovofjapan(self, ctx):
+    @commands.command()
+    async def markovofjapan(self, ctx: Context) -> None:
         if MemeCommand.check_rate_limit(ctx, 60):
             await self.gen_markov(ctx, path="text_sources/history_of_japan.txt")
 
     @checks.sudo()
     @commands.group()
-    async def sourcemarkov(self, ctx):
+    async def sourcemarkov(self, ctx: Context) -> None:
         pass
 
     @checks.sudo()
     @sourcemarkov.command()
-    async def add_from_pastebin(self, ctx, name: str, pastebin_url: str):
+    async def add_from_pastebin(
+            self, ctx: Context, name: str, pastebin_url: str
+    ) -> None:
         sio = await utils.get_text_from_pastebin(pastebin_url)
         self.config.hset("config:markov:custom_files", name, sio.getvalue())
         await ctx.send("Markov registered successfully")
 
     @checks.sudo()
     @sourcemarkov.command()
-    async def add_from_upload(self, ctx, name: str):
+    async def add_from_upload(self, ctx: Context, name: str) -> None:
         try:
             sio = await utils.get_text_from_upload(ctx.message.attachments[0].url)
             self.config.hset("config:markov:custom_files", name, sio.getvalue())
@@ -256,18 +282,18 @@ class Markov:
 
     @checks.sudo()
     @sourcemarkov.command()
-    async def list(self, ctx):
+    async def list(self, ctx: Context) -> None:
         names = self.config.hkeys("config:markov:custom_files")
         await ctx.send("Keys: \n{}".format("\n".join(names)))
 
     @checks.sudo()
     @sourcemarkov.command()
-    async def remove(self, ctx, name: str):
+    async def remove(self, ctx: Context, name: str) -> None:
         self.config.hdel("config:markov:custom_files", name)
 
     @checks.sudo()
     @sourcemarkov.command()
-    async def generate(self, ctx, name: str):
+    async def generate(self, ctx: Context, name: str) -> None:
         sio = StringIO()
         text = self.config.hget("config:markov:custom_files", name)
         sio.write(text)
@@ -275,7 +301,7 @@ class Markov:
         await self.gen_markov(ctx, path=sio, use_newlines=False)
 
     @commands.command()
-    async def seedmarkov(self, ctx, *, seed: str):
+    async def seedmarkov(self, ctx: Context, *, seed: str) -> None:
         """
         Generate a usermarkov based on a starting word or phrase.
         """
@@ -306,7 +332,7 @@ class Markov:
         await ctx.send(output)
 
     @commands.command()
-    async def dualmarkov(self, ctx, *, member: str):
+    async def dualmarkov(self, ctx: Context, *, member: str) -> None:
         """Get a markov comprised of your history combined with that of another."""
 
         MemeCommand.check_rate_limit(ctx, 60, cooldown_group="usermarkov")
@@ -325,14 +351,14 @@ class Markov:
             await ctx.send(output)
 
     @commands.command()
-    async def usermarkov(self, ctx, *, user: str=None):
+    async def usermarkov(self, ctx: Context, *, user: str=None) -> None:
         """Get a markov chain generated from a user's history."""
         if await self.check_verification(ctx):
             MemeCommand.check_rate_limit(ctx, 60, cooldown_group="usermarkov")
             await self.gen_markov(ctx, "usermarkov", user)
 
     @commands.command(aliases=["loodmarkov"], hidden=True)
-    async def lewdmarkov(self, ctx):
+    async def lewdmarkov(self, ctx: Context) -> None:
         """:eyes:"""
         # Because it takes the model 20s to generate (enough to time pory out), it's more efficient to just use
         # pre-generated lines.
@@ -360,10 +386,10 @@ class Markov:
             await ctx.send(loodmarkov_output)
 
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def reset_lewdmarkov_pos(self):
+    @commands.command()
+    async def reset_lewdmarkov_pos(self) -> None:
         self.config.set("config:markov:lewdmarkov_pos", "1")
 
 
-def setup(bot):
+def setup(bot: Bot) -> None:
     bot.add_cog(Markov(bot))

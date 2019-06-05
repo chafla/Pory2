@@ -4,8 +4,7 @@ Playlist setup for the music player.
 Procedure should be like this:
     - Connect to voice channel, initializing a new playlist which is saved per vc.
     - Wait on further action.
-    - When a new song is queued up, create a new `Entry` object which contains the song info. Could even just be the
-        dict.
+    - When a new song is queued up, create a new `Entry` object which contains the song info. Could even just be the dict.
     - Fetch stats first for the entry. After, create a future object that is tracked as an instance variable. The player
         will wait for this to proceed before playing the next song.
         - If another song is queued up while the current one is queueing/playing; create the object, try to download it
@@ -87,6 +86,12 @@ class Playlist:
     def is_playing(self):
         return self.voice_client.is_playing()
 
+    @property
+    def current_playlist(self):
+        output = "**Current song:** {}\n".format(self._build_track_message(self.active_song))
+        output += "\n".join([self._build_track_message(i) for i in self.live_queue])
+        return output
+
     async def _create_new_entry(self, song_url):
         """Download and initialize a new song/track."""
         # Start the music download first
@@ -107,16 +112,16 @@ class Playlist:
         self.bot.loop.create_task(self.bound_text_channel.send(message_content))
 
     @staticmethod
-    def _build_track_message(info_dict):
+    def _build_track_message(info_dict, mention_requester=False):
         """Most we are sure to get is url, title, and ID. Create a song repr that doesn't crash out."""
         ret = "**{}**".format(info_dict["title"])
         if info_dict.get("uploader"):
             ret += " by {}\n".format(info_dict["uploader"])
 
         if info_dict.get("requester"):
-            ret += "\nrequested by {}".format(info_dict["requester"].mention)
+            ret += "\nrequested by {}".format(info_dict["requester"].mention if mention_requester else
+                                              str(info_dict["requester"]))
 
-        # ret += "\n({})".format(info_dict["url"])
         return ret.format(info_dict)
 
     def shuffle(self):
@@ -178,12 +183,20 @@ class Playlist:
 
         self._history_queue.append(self.active_song)
         try:
+            # We need to check to see if the last one was skipped because it seems that sometimes a skip will have
+            # already executed the after_song in its after
             self.active_song = self.live_queue.pop(0)
+            # if not self._skipped_last:
+            #     self.active_song = self.live_queue.pop(0)
+            # else:
+            #     self.active_song = self.live_queue.pop(0)
+            #     self._skipped_last = False
 
             if self.active_song.get("not_downloaded"):
                 future = self.executor.submit(self.downloader.download_audio, self.active_song["url"])
                 concurrent.futures.wait([future], 30, return_when=concurrent.futures.FIRST_COMPLETED)
                 future.result()
+            # self.bot.loop.create_task(self.play_song())
             self.play_song()
         except IndexError:
             # It's empty: end of playlist

@@ -1,13 +1,18 @@
 """Support for friend codes"""
 
-from discord.ext import commands
+
 import re
-import discord
+
+from typing import Optional
+
+from discord import Color, Embed, Member
+from discord.ext import commands
+from discord.ext.commands import Bot, Context
 
 
 class FriendCodeValidator:
 
-    def __init__(self, argument):
+    def __init__(self, argument: str) -> None:
         fc_parts = re.findall("([0-9]{4})", argument)  # Find three 4-num long blocks
         if fc_parts is not None and len(fc_parts) == 3:
             self.code = "{0.[0]}-{0.[1]}-{0.[2]}".format(fc_parts)
@@ -23,6 +28,7 @@ class FriendCodes:
         "3ds": "3DS",
         "switch": "Switch",
         "sw": "Switch",
+        "go": "Pokemon GO"
     }
 
     game_name_substitutions = {
@@ -34,13 +40,13 @@ class FriendCodes:
         "omega": "Omega Ruby"
     }
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.config = self.bot.config
         # self.bot.loop.create_task(self._retro_fix_friendcodes())
 
     @staticmethod
-    def _parse_fc(text):
+    def _parse_fc(text: str) -> Optional[str]:
         """Get an inputted fc-like string and format it in a constant form"""
         fc_parts = re.findall("([0-9]{4})", text)  # Find 4-num long blocks
         if len(fc_parts) != 3 or fc_parts is None:
@@ -49,7 +55,7 @@ class FriendCodes:
             return "{0}-{1}-{2}".format(fc_parts[0], fc_parts[1], fc_parts[2])
 
     @commands.group()
-    async def fc(self):
+    async def fc(self) -> None:
         """Set your FCs or find another user's FC
 
         `[p]fc get @user` to look up an FC
@@ -57,32 +63,26 @@ class FriendCodes:
         pass
 
     @fc.command()
-    async def set(self, ctx, system: str, fc: str):
+    async def set(self, ctx: Context, system: str, fc: str) -> None:
         """Set your friend code.
-        System can be '3ds' or 'switch'"""
+        System can be '3ds', 'switch', or 'go'"""
         # Check to see if the fc is in proper form: should at least have four groups of 4 numbers
         friend_code = self._parse_fc(fc)
 
         if friend_code is None:
             await ctx.send("Invalid friend code.\nFormat: `0000-0000-0000`")
             return
-        elif system.lower() not in ["3ds", "switch", "sw"]:
-            await ctx.send("Invalid system specified.\nSystems are '3DS' and 'Switch'.")
+        elif system.lower() not in self.formatted_names:
+            await ctx.send("Invalid system specified.\nSystems are '3DS', 'Switch', and 'Go'")
             return
 
-        formatted_names = {
-            "3ds": "3DS",
-            "switch": "Switch",
-            "sw": "Switch",
-        }
-
         self.config.set("user:{}:fc:{}:code".format(ctx.message.author.id,
-                                                    formatted_names[system.lower()]), friend_code)
+                                                    self.formatted_names[system.lower()]), friend_code)
 
         await ctx.send("Friend code updated successfully.")
 
     @fc.command()
-    async def get(self, ctx, *, mention: discord.Member=None):
+    async def get(self, ctx: Context, *, mention: Member=None) -> None:
         """Get a user's friend code. If a mention is omitted, then it gets the users' own friend code."""
 
         member = ctx.message.author if mention is None else mention
@@ -92,19 +92,22 @@ class FriendCodes:
             await ctx.send("No game info registered for {}.".format(member.display_name))
             return
         else:
-            embed = discord.Embed(title="Game info for {}:".format(member.display_name),
-                                  color=discord.Color.orange())
+            embed = Embed(
+                title="Game info for {}:".format(member.display_name),
+                color=Color.orange()
+            )
             embed.set_author(name=member.name, icon_url=member.avatar_url)
             # First, want to add 3DS friend code, then follow it with in game igns
             for system in systems:
                 sys_name = system.split(":")[-2]
-                embed.add_field(name=sys_name,
-                                value=self.config.get("user:{}:fc:{}:code".format(member.id,
-                                                                                  sys_name)))
+                embed.add_field(
+                    name=sys_name,
+                    value=self.config.get("user:{}:fc:{}:code".format(member.id, sys_name))
+                )
                 igns = ""
                 for game, name in self.config.hgetall("user:{}:fc:{}:ign".format(member.id,
                                                                                  sys_name)).items():
-                    igns += "{}: {}\n".format(game.capitalize(), name)
+                    igns += "{}: {}\n".format(game.title(), name)
 
                 if igns:
                     embed.add_field(name="IGNs", value=igns)
@@ -112,12 +115,12 @@ class FriendCodes:
             await ctx.send(embed=embed)
 
     @get.error
-    async def fc_error(self, error, ctx):
+    async def fc_error(self, error: Exception, ctx: Context) -> None:
         if isinstance(error, commands.BadArgument):
             await ctx.send(str(error))
 
     @fc.command()
-    async def set_ign(self, ctx, game: str, *, in_game_name: str):
+    async def set_ign(self, ctx: Context, game: str, *, in_game_name: str) -> None:
         """Register an IGN for a game."""
 
         valid_games = ["Sun", "Moon", "Omega Ruby", "Alpha Sapphire", "X", "Y", "Ultra Sun", "Ultra Moon"]
@@ -138,5 +141,5 @@ class FriendCodes:
         await ctx.send("IGN updated successfully.")
 
 
-def setup(bot):
+def setup(bot: Bot) -> None:
     bot.add_cog(FriendCodes(bot))

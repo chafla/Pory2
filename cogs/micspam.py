@@ -9,9 +9,21 @@ from cogs.utils.audio import audio_utils
 from sys import stderr
 from .utils.utils import check_ids, check_urls
 from os import remove
+import random
 
 
 log = logging.getLogger()
+
+
+class CtxMessageWrapper:
+
+    def __init__(self, message: discord.Message):
+        self.message = message
+        self.channel = message.channel
+        self.author = message.author
+
+    def send(self, *args, **kwargs):
+        return self.channel.send(*args, **kwargs)
 
 
 class Micspam:
@@ -82,7 +94,7 @@ class Micspam:
                 await ctx.send("Couldn't find that channel or already connected")
                 return
 
-        if check_urls(clip_chosen):
+        if check_urls(str(clip_chosen)):
             await self.downloader.download_audio_threaded(clip_chosen)
             stats = await self.downloader.download_stats_threaded(clip_chosen)
             micspam_path = stats["expected_filename"]
@@ -129,6 +141,14 @@ class Micspam:
     async def kill_voice_connections(self):
         for voice_obj in self.bot.voice_clients:
             await voice_obj.disconnect()
+
+    async def on_message(self, message):
+        # TODO FIX THIS NASTY HACK
+        if message.guild is not None and message.guild.id in [274731851661443074, 283101596806676481, 401182039421747210, 78716585996455936, 146626123990564864, 392161981261545473, 484966083795746816]\
+                and "owo" in message.content.lower() and message.author.voice is not None:
+            await self.play_micspam(message.author.voice.channel.name,
+                                    random.choice([2, 10, 19, 22, 29, 34, 38]),
+                                    CtxMessageWrapper(message))
 
     def __unload(self):
         if self.bot.voice_clients:

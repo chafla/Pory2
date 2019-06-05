@@ -1,10 +1,18 @@
+
 import logging
-import discord
-from cogs.utils.errors import CommandBlacklisted, CommandRateLimited
-from cogs.utils.redis_config import RedisConfig
 import time
 
+from typing import Any, List, Optional, Set
+
+import discord
+from discord.ext.commands import Context
+
+from cogs.utils.errors import CommandBlacklisted, CommandRateLimited
+from cogs.utils.redis_config import RedisConfig
+
+
 log = logging.getLogger()
+
 
 config = RedisConfig()
 
@@ -18,16 +26,20 @@ class MemeCommand:
     server_blacklist = [146668917866102784]
     DEFAULT_COOLDOWN = 120
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args, **kwargs) -> 'MemeCommand':
         instance = object.__new__(cls)
         cls.instances.append(instance)
         return instance
 
     @classmethod
-    def get_instances(cls):
+    def get_instances(cls) -> List['MemeCommand']:
         return cls.instances
 
-    def __init__(self, name, ctx, cooldown=-1, action=None, kind=None, restricted=None):
+    def __init__(
+            self, name: str, ctx: Context, cooldown: int=-1,
+            # The below instance params are never set or used
+            action: Any=None, kind: Any=None, restricted: Any=None
+    ) -> None:
         # Note: Default cooldown is -1 because of how nonetype objects work in python
         self._ts = 0
         self.has_alerted = False
@@ -41,32 +53,37 @@ class MemeCommand:
         self.channel = ctx.message.channel
         self.channel_id = ctx.message.channel.id
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
-    @classmethod
-    def get_meme(cls, command):
-        return cls.instances[command]
+    # No usages found
+    # @classmethod
+    # def get_meme(cls, command):  # TODO: Not entire certain the intended use
+    #     return cls.instances[command]
 
     @property
-    def channel_blacklist(self):
+    def channel_blacklist(self) -> Set[str]:
         return config.smembers("config:rate_limits:chan_blacklist")
 
     @staticmethod
-    async def get_blacklist():
+    async def get_blacklist() -> Set[str]:
+        # Mypy really doesn't like the way this is done
+        # Why is this a coro?
         return MemeCommand.channel_blacklist
 
     @staticmethod
-    def increase_counter(ctx):
+    def increase_counter(ctx: Context) -> None:
         """
         Increase the database counter for the command.
         """
         if not config.exists("misc:rate_limits:counters"):
             config.zadd("misc:rate_limits:counters", 1.0, ctx.command.name)
         else:
-            config.zincrby("misc:rate_limits:counters", ctx.command.name)
+            config.zincrby("misc:rate_limits:counters", ctx.command.name, 1)
 
-    def _handle_rate_limit(self, ctx, ignore_blacklist, priority_blacklist):
+    def _handle_rate_limit(
+            self, ctx: Context, ignore_blacklist: bool, priority_blacklist: List[int]
+    ) -> Optional[bool]:
         # TODO: Consider making a decorator
         """
         Wrapper and filter for certain commands. This function takes care of controlling meme commands by blacklisting
@@ -132,7 +149,10 @@ class MemeCommand:
             return None
 
     @staticmethod
-    def check_rate_limit(ctx, cooldown=-1, ignore_blacklist=False, cooldown_group=None, priority_blacklist=None):
+    def check_rate_limit(
+            ctx: Context, cooldown: int=-1, ignore_blacklist: bool=False,
+            cooldown_group: str=None, priority_blacklist: List[int]=None
+    ) -> bool:
 
         """
         Check if a command is rate-limited.

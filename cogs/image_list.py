@@ -11,21 +11,29 @@ img:
 
 
 """
-import random
-from imgurpython import ImgurClient
-from discord.ext import commands
-import discord
-import json
-import webbrowser
+
+import asyncio
 import logging
+import json
+import random
 import sys
 import time
-import asyncio
+import webbrowser
+
+import discord
+
+from discord.ext import commands
+from discord.ext.commands import Bot, Context
+from imgurpython import ImgurClient
+from redis import ResponseError
+from typing import Union, List, Optional, Dict
+
 from .utils import checks, rate_limits, redis_config
 from .utils.utils import check_urls
-from redis import ResponseError
+
 
 log = logging.getLogger()
+
 
 config = redis_config.RedisConfig()
 
@@ -34,13 +42,13 @@ class ImgurAuth:
 
     FORCE_AUTH = True
 
-    def __init__(self):
+    def __init__(self) -> None:
         with open('auth.json', 'r+', encoding='utf-8') as outfile:
             self.auth = json.load(outfile)
 
         self.imgur_client = self.attempt_imgur_auth()
 
-    def imgur_auth_from_pin(self):
+    def imgur_auth_from_pin(self) -> ImgurClient:
         # If there are no valid imgur auth tokens saved, authenticate with a pin to refresh/initialize them.
         imgur_client = ImgurClient(self.auth['client_id'], self.auth['client_secret'])
         authorization_url = imgur_client.get_auth_url('pin')
@@ -63,7 +71,7 @@ class ImgurAuth:
             else:
                 raise e
 
-    def imgur_auth_from_cache(self):
+    def imgur_auth_from_cache(self) -> Optional[ImgurClient]:
         # Try to authenticate with saved credentials present in auth.json.
             try:
                 imgur_client = ImgurClient(**self.auth["imgur"])
@@ -76,7 +84,7 @@ class ImgurAuth:
                 log.info("Error returned:({0.__class__.__name__}: {0}".format(e), file=sys.stderr)
                 return None
 
-    def attempt_imgur_auth(self):
+    def attempt_imgur_auth(self) -> ImgurClient:
         try_auth = self.imgur_auth_from_cache()
         if try_auth is None:  # If client object doesn't exist for some reason
             log.info("Could not authenticate for some reason. Fetching new access/refresh tokens.")
@@ -92,7 +100,10 @@ class ImageList:
     imgur_client = _auth.attempt_imgur_auth()
     bot = None
 
-    def __init__(self, name, album_ids, image_list=None, added_msg=None):
+    def __init__(
+            self, name: str, album_ids: List[str],
+            image_list: Optional[List[str]]=None, added_msg: Optional[str]=None
+    ) -> None:
         """
         Handles image lists, for meme commands such as fug and nonya. Allows for images to be added to albums and then
         extracted when needed.
@@ -108,15 +119,18 @@ class ImageList:
 
         self.msg_on_add = added_msg
 
-    @property
-    def image_count(self):
+    def __len__(self) -> int:
         return len(self.images)
 
-    def save_to_cache(self):
+    @property
+    def image_count(self) -> int:
+        return len(self)
+
+    def save_to_cache(self) -> None:
         """Create a task to update the instance as well as writing to cache."""
         self.bot.loop.create_task(self.to_cache())
 
-    def load_from_imgur(self, *album_ids):
+    def load_from_imgur(self, *album_ids: str) -> List[str]:
         """Load image urls from imgur."""
         image_urls = []
         if not album_ids:
@@ -133,7 +147,8 @@ class ImageList:
 
         return image_urls
 
-    def get_image(self, blacklist=None):
+    # Best guess at `blacklist` type. Param never used.
+    def get_image(self, blacklist: Optional[List[str]]=None):
         # Allow for blacklisting to occur since deleting is a pita
         if blacklist is not None:
             while True:
@@ -143,7 +158,13 @@ class ImageList:
         else:
             return random.choice(self.images)
 
-    async def add_to_list(self, ctx, url, user_whitelist=None, target_album_id=None):  # Needs to pass in global client
+    async def add_to_list(
+            self,
+            ctx: Context,
+            url: str,
+            user_whitelist: List[int]=None,
+            target_album_id: str=None
+    ) -> None:  # Needs to pass in global client
         """
         Add an image to an imgur album.
         Note that the album does need to have been created by the user acct the bot uses.
@@ -160,12 +181,12 @@ class ImageList:
 
             self.save_to_cache()
 
-    async def remove_album(self, album_id):
+    async def remove_album(self, album_id: str) -> 'ImageList':
         """Remove an album and all its images from the image list."""
         config.srem("img:albums:{}:ids".format(self.name), album_id)  # Expected to raise an error
         return ImageList.from_cache(self.name)
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Union[str, Dict[str, Union[List[str], int]]]]:
         """Write the object to a dictionary form for use in caching. Update it from imgur as well."""
 
         images = []
@@ -188,7 +209,7 @@ class ImageList:
 
         return output
 
-    async def to_cache(self):
+    async def to_cache(self) -> None:
         images = []
         config.set("img:cache:{}:name".format(self.name), value=self.name)
         for album_id in self.album_list:
@@ -204,7 +225,7 @@ class ImageList:
         self.images = images  # Since we're pulling them all from imgur again anyway
 
     @classmethod
-    def from_cache(cls, image_list_name):
+    def from_cache(cls, image_list_name: str) -> 'ImageList':
         album_ids = list(config.smembers("img:albums:{}:ids".format(image_list_name)))
         image_list = list(config.smembers("img:cache:{}:imgs".format(image_list_name)))
         return cls(image_list_name, album_ids, image_list=image_list)
@@ -212,7 +233,7 @@ class ImageList:
 
 class ImageListCommands:
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         ImageList.bot = bot
         self.list_objs = []
@@ -238,16 +259,18 @@ class ImageListCommands:
         log.info("Image lists initialized.")
         self.bot.loop.create_task(self.update_cache())
 
-    def retro_load_albums_to_redis(self):
+    def retro_load_albums_to_redis(self) -> None:
         n = self.config.get("album_lists")
         for name, album_ids in n.items():
             config.sadd("img:albums:{}:ids".format(name), *album_ids)
 
-    async def process_command(self, ctx):
+    async def process_command(self, ctx: Context) -> None:
         """
         Automatically handle a basic image list. Take context as a kwarg so we can use it as a Command
         This may or may not work
         """
+        if not isinstance(ctx.message.channel, discord.DMChannel) and ctx.guild.id == 111504456838819840:
+            return
         if rate_limits.MemeCommand.check_rate_limit(ctx,
                                                     cooldown_group="image_list",
                                                     priority_blacklist=[319309336029560834]):  # #mature_chat
@@ -258,9 +281,18 @@ class ImageListCommands:
                 obj = discord.utils.get(self.list_objs, name=ctx.command.name)
                 await ctx.send(obj.get_image())
 
-    async def add(self, name, ctx, url, whitelist=None, target_album_id=None):
+    async def add(
+            self, name: str, ctx: Context, url: str,
+            whitelist: List[int]=None, target_album_id: str=None
+    ) -> None:
         obj = discord.utils.get(self.list_objs, name=name)
-        url = url.strip("<>")
+
+        # Try to remove it, but fail silently if it's NoneType (meaning we might have passed in an embed)
+        try:
+            url = url.strip("<>")
+        except AttributeError:
+            pass
+
         if url is None:
             if ctx.message.attachments:
                 url = ctx.message.attachments[0]
@@ -277,7 +309,7 @@ class ImageListCommands:
 
         await obj.add_to_list(ctx, url, whitelist, target_album_id)
 
-    async def update_cache(self):
+    async def update_cache(self) -> None:
         """
         Update all cache files.
         Must be called as a task, otherwise it blocks the event loop.
@@ -295,15 +327,17 @@ class ImageListCommands:
             log.warning("Cache updating, please wait.")
 
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def write_datafiles_to_json(self, ctx):
+    @commands.command()
+    async def write_datafiles_to_json(self, ctx: Context) -> None:
         """Manual command to initialize the datafile"""
         await self.update_cache()
         await ctx.send("\N{OK HAND SIGN}")
 
-    @commands.command(hidden=True, aliases=["add_album"])
     @checks.sudo()
-    async def add_image_list(self, ctx, list_name: str, list_id: str):
+    @commands.command(aliases=["add_album"])
+    async def add_image_list(
+            self, ctx: Context, list_name: str, list_id: str
+    ) -> None:
         """Add an image list for a command."""
         command_exists = True
         if not config.exists("img:albums:{}:ids".format(list_name)):
@@ -317,7 +351,7 @@ class ImageListCommands:
                 obj = ImageList(list_name, [list_id])
             else:
                 obj.images.append(list_id)
-            obj.to_cache()
+            obj.save_to_cache()
 
         await ctx.send("Image list added to datafile successfully.")
         if not command_exists:
@@ -325,7 +359,9 @@ class ImageListCommands:
 
     @checks.sudo()
     @commands.command()
-    async def remove_album(self, ctx, command_name: str, album_id: str):
+    async def remove_album(
+            self, ctx: Context, command_name: str, album_id: str
+    ) -> None:
         """Remove an album from an image list command"""
         obj = discord.utils.get(self.list_objs, name=command_name)
 
@@ -342,7 +378,9 @@ class ImageListCommands:
 
     @checks.not_in_oaks_lab()
     @commands.command()
-    async def nonya(self, ctx):
+    async def nonya(self, ctx: Context) -> None:
+        if ctx.guild.id == 111504456838819840:
+            return
         if rate_limits.MemeCommand.check_rate_limit(ctx,
                                                     cooldown_group="image_list",
                                                     priority_blacklist=[278043765082423296]):
@@ -364,330 +402,347 @@ class ImageListCommands:
                 await ctx.send(obj.get_image())
 
     @commands.command()
-    async def fug(self, ctx):
+    async def fug(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def purplewurmple(self, ctx):
+    async def purplewurmple(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def loss(self, ctx):
+    async def loss(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def star(self, ctx):
+    async def star(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def ddom(self, ctx):
+    async def ddom(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command(aliases=["shep"])
-    async def loreal(self, ctx):
+    async def loreal(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def salesmenace(self, ctx):
+    async def salesmenace(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def dusk(self, ctx):
+    async def dusk(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def pew(self, ctx):
+    async def pew(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def sylv(self, ctx):
+    async def sylv(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def bait(self, ctx):
+    async def bait(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def sabl(self, ctx):
+    async def sabl(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def lux(self, ctx):
+    async def lux(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def shinx(self, ctx):
+    async def shinx(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def kek(self, ctx):
+    async def kek(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def umbr(self, ctx):
+    async def umbr(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def bulba(self, ctx):
+    async def bulba(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def typh(self, ctx):
+    async def typh(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def noi(self, ctx):
+    async def noi(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def luc(self, ctx):
+    async def luc(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def absol(self, ctx):
+    async def absol(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def zig(self, ctx):
+    async def zig(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command(aliases=["myau"])
-    async def espurr(self, ctx):
+    async def espurr(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def rowl(self, ctx):
+    async def rowl(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def glace(self, ctx):
+    async def glace(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def latias(self, ctx):
+    async def latias(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def arcanine(self, ctx):
+    async def arcanine(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def kip(self, ctx):
+    async def kip(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def luran(self, ctx):
+    async def luran(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def lap(self, ctx):
+    async def lap(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def pidge(self, ctx):
+    async def pidge(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def kyu(self, ctx):
+    async def kyu(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def deli(self, ctx):
+    async def deli(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def glace(self, ctx):
+    async def glace(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def flare(self, ctx):
+    async def flare(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def flyg(self, ctx):
+    async def flyg(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def geng(self, ctx):
+    async def geng(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def zard(self, ctx):
+    async def zard(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def pmdnd(self, ctx):
+    async def pmdnd(self, ctx: Context) -> None:
         if ctx.message.guild.id in [274060630170927114,
                                     283101596806676481,
                                     239125949122215952]:
             await self.process_command(ctx)
 
     @commands.command()
-    async def aegi(self, ctx):
+    async def aegi(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def honk(self, ctx):
+    async def honk(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def kern(self, ctx):
+    async def kern(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def cino(self, ctx):
+    async def cino(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def drei(self, ctx):
+    async def drei(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def ruff(self, ctx):
+    async def ruff(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def karp(self, ctx):
+    async def karp(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def faceswap(self, ctx):
+    async def faceswap(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def baned(self, ctx):
+    async def baned(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def dewott(self, ctx):
+    async def dewott(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def backstory(self, ctx):
+    async def backstory(self, ctx: Context) -> None:
         if not isinstance(ctx.message.channel, discord.DMChannel) and ctx.message.guild.id in [283101596806676481,
                                                                                                239125949122215952]:
             await self.process_command(ctx)
 
     @commands.command()
-    async def toto(self, ctx):
+    async def toto(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def quag(self, ctx):
+    async def quag(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def squirt(self, ctx):
+    async def squirt(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command(aliases=["wish"])
-    async def jirachi(self, ctx):
+    async def jirachi(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def pawn(self, ctx):
+    async def pawn(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def mew(self, ctx):
+    async def mew(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def delet(self, ctx):
+    async def delet(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def vap(self, ctx):
+    async def vap(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command(hidden=True)
-    async def esparoo(self, ctx):
+    async def esparoo(self, ctx: Context) -> None:
         if not isinstance(ctx.message.channel, discord.DMChannel) and ctx.message.guild.id in [283101596806676481]:
             await self.process_command(ctx)
 
     @commands.command()
-    async def saws(self, ctx):
+    async def saws(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def noodle(self, ctx):
+    async def noodle(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def riolu(self, ctx):
+    async def riolu(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def vee(self, ctx):
+    async def vee(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def espy(self, ctx):
+    async def espy(self, ctx: Context) -> None:
         if not isinstance(ctx.message.channel, discord.DMChannel) and ctx.message.guild.id in [283101596806676481]:
             await self.process_command(ctx)
 
     @commands.command()
-    async def drag(self, ctx):
+    async def drag(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def chu(self, ctx):
+    async def chu(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def goo(self, ctx):
+    async def goo(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command(hidden=True)
-    async def kekx(self, ctx):
+    async def kekx(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def pory(self, ctx):
+    async def pory(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def trash(self, ctx):
+    async def trash(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
-    async def forget(self, ctx):
+    async def forget(self, ctx: Context) -> None:
+        await self.process_command(ctx)
+
+    @commands.command()
+    async def furr(self, ctx: Context) -> None:
+        await self.process_command(ctx)
+
+    @commands.command()
+    async def nine(self, ctx: Context) -> None:
+        await self.process_command(ctx)
+
+    @commands.command()
+    async def whim(self, ctx: Context) -> None:
+        await self.process_command(ctx)
+
+    @checks.in_cj()
+    @commands.command()
+    async def cursejerk(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     # Adding commands
 
     @commands.command(hidden=True)
-    async def addfug(self, ctx, url: str=None):
+    async def addfug(self, ctx: Context, url: str=None) -> None:
         await self.add("fug", ctx, url, [125788490007838720, 78716152653553664])
 
     @commands.command(hidden=True)
-    async def addnonya(self, ctx, url: str=None):
+    async def addnonya(self, ctx: Context, url: str=None) -> None:
         await self.add("nonya", ctx, url)
 
     @commands.command(hidden=True)
-    async def addloss(self, ctx, url: str=None):
+    async def addloss(self, ctx: Context, url: str=None) -> None:
         await self.add("loss", ctx, url, [118599124156284929, 78716152653553664, 122661718974398468])
 
     @commands.command(hidden=True)
-    async def addloreal(self, ctx, url: str=None):
+    async def addloreal(self, ctx: Context, url: str=None) -> None:
         await self.add("loreal", ctx, url, [98245271313481728, 114994340320903175])
 
     @commands.command(hidden=True)
-    async def addmenace(self, ctx, url: str=None):
+    async def addmenace(self, ctx: Context, url: str=None) -> None:
         await self.add("salesmenace", ctx, url, [184516140872105984])
 
     @commands.command(hidden=True)
-    async def addluc(self, ctx, url: str=None):
+    async def addluc(self, ctx: Context, url: str=None) -> None:
         await self.add("luc", ctx, url, [78716152653553664])
 
     @commands.command(hidden=True)
-    async def adddelet(self, ctx, url: str=None):
+    async def adddelet(self, ctx: Context, url: str=None) -> None:
         await self.add("delet", ctx, url, [78716152653553664], target_album_id="11UlN")
 
-    async def on_timer_update(self, secs):
+    async def on_timer_update(self, secs: int) -> None:
         if secs % 21600 == 0 and secs != 0:  # 6 hrs of uptime
             self.bot.loop.create_task(self.update_cache())
 
 
-def setup(bot):
+def setup(bot: Bot):
     bot.add_cog(ImageListCommands(bot))

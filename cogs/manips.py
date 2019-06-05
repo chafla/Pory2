@@ -1,21 +1,29 @@
 """image manipulations"""
 
+import math
+import os.path
+
+from glob import glob
+from io import BytesIO
+from os import remove
+from random import randint, random
+from typing import Union, Tuple
+# from uuid import uuid4
+
+import aiohttp
+import cv2
+import discord
+import numpy as np
 import PIL
 import PIL.Image
+
+from discord import Member
+from discord.ext import commands
+from discord.ext.commands import Bot, Context
+
 from .utils import rate_limits, checks, rgb_transform, gif_overlay, utils
 from .utils.magik import CustomImage
-from glob import glob
-import os.path
-from os import remove
-import aiohttp
-import io
-import discord
-from discord.ext import commands
-import numpy as np
-import cv2
-from random import randint
-import math
-from uuid import uuid4
+
 
 # TODO Make these work with attachments
 
@@ -24,7 +32,7 @@ class Manips:
 
     VALID_PARAMS = ["rad_blur_degrees", "cas_intensity"]
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
 
         self.blacklisted_channels = [278043765082423296]
@@ -33,14 +41,7 @@ class Manips:
         self._parameter_cache = self.config.hgetall("config:manips:params")
 
     @staticmethod
-    def add_more_jpeg(base_path, *, output_path=None, quality=5):
-        base_img = PIL.Image.open(base_path)
-        base_img.save(output_path, "JPEG", quality=quality)
-        if isinstance(output_path, io.BytesIO):
-            base_path.seek(0)
-
-    @staticmethod
-    def overlay_sunglasses(base_img_path):
+    def overlay_sunglasses(base_img_path: Union[str, BytesIO]) -> Union[str, BytesIO]:
         output_fp = "sunglasses.png"
         base_img = PIL.Image.open(base_img_path)
         sunglasses_overlay = PIL.Image.open("templates/glasses.png")
@@ -75,9 +76,11 @@ class Manips:
         return output_fp
 
     @staticmethod
-    def find_eyes(image_path, base_img_size):
+    def find_eyes(
+            image_path: str, base_img_size: int
+    ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
         """Find eyes, returning an (x, y, w, h) tuple of the two largest"""
-        # TODO Make this a filter_eyes thing that also checks relative coords
+        # TODO Make this a filter_eyes thing that also checks relative coords 
         eye_cascade = cv2.CascadeClassifier('templates/cascades/haarcascade_eye.xml')
         cv2_img = cv2.imread(image_path)
         gray = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2GRAY)
@@ -96,7 +99,10 @@ class Manips:
                     return largest_eyes[i], largest_eyes[j]
 
     @staticmethod
-    def add_lens_flare_to_eyes(image_path, output_fp):
+    def add_lens_flare_to_eyes(
+            image_path: Union[str, BytesIO],
+            output_fp: Union[str, BytesIO]
+    ) -> Union[str, BytesIO]:
 
         base_image = PIL.Image.open(image_path)
         lens_flare = PIL.Image.open("templates/overlays/lens_flare.png")
@@ -146,13 +152,17 @@ class Manips:
 
         # new_img.save(output_fp)
         pil_im.save(output_fp, format="PNG")
-        output = io.BytesIO()
+        output = BytesIO()
         pil_im.save(output, format="PNG")
         output.seek(0)
         return output
 
     @staticmethod
-    def add_overlay_template(base_path, overlay_path, output_path):
+    def add_overlay_template(
+            base_path: Union[str, BytesIO],
+            overlay_path: Union[str, BytesIO],
+            output_path: Union[str, BytesIO]
+    ) -> Union[str, BytesIO]:
         base_img = PIL.Image.open(base_path)
         overlay_img = PIL.Image.open(overlay_path)
 
@@ -173,13 +183,161 @@ class Manips:
                       overlay_img)  # Mask it with the original image itself
 
         new_img.save(output_path)
-        output = io.BytesIO()
+        output = BytesIO()
         new_img.save(output, format="PNG")
         new_img.seek(0)
         return output
 
     @staticmethod
-    def add_image_underneath(base_image_path, overlay_fp, output_fp):
+    def disintegrate(base_image_fp: Union[str, BytesIO]) -> str:
+        """
+        I don't feel so good, Mr. Stark...
+        :param base_image_fp:
+        :return:
+        """
+        if isinstance(base_image_fp, BytesIO):
+            # https://stackoverflow.com/questions/46624449/load-bytesio-image-with-opencv
+            file_bytes = np.asarray(bytearray(base_image_fp.read()), dtype=np.uint8)
+            cv2_img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        else:
+            cv2_img = cv2.imread(base_image_fp)
+
+        # In order to make sure it works pretty consistently across the board, we'll upscale smaller images to at least
+        # be 200x
+
+        # TODO surely a cleaner way to do this
+
+        h, w, _ = cv2_img.shape
+
+        if h < 200:
+            h_upscale_ratio = 200 / h
+        else:
+            h_upscale_ratio = 1
+
+        if w < 200:
+            w_upscale_ratio = 200 / w
+        else:
+            w_upscale_ratio = 1
+
+        scaling_ratio = min(h_upscale_ratio, w_upscale_ratio)
+
+        if scaling_ratio != 1:
+            cv2_img = cv2.resize(cv2_img, (0, 0), fx=scaling_ratio, fy=scaling_ratio)
+            h, w, _ = cv2_img.shape
+
+        cv2_image_tmp = np.copy(cv2_img)
+
+        chunk_amount = 90  # 75 is sweet spot
+        chunk_size = max(int((w + h) // 2 // chunk_amount // 2), 3)
+
+        # This value adjusts the base probability needed for a spot to trigger.
+        # The lower the value, the higher
+        chunk_move_threshold = 0.5
+
+        # 1 / this value represents the point in the image where it'll start dissolving
+        starting_fraction = 5
+
+        # Force a chunk to trigger
+        force_chunk_trigger = False
+
+        # The starting value is basically 1/3 of the way into the image
+        # This matches more with the general idea of the dusting happening partway through the image,
+        # and also saves us time in iterations, cutting off 1/3 of the processing time.
+        left_threshold = (w - chunk_size) // starting_fraction if starting_fraction != 0 else 0
+        for r in range(h - chunk_size, chunk_size - 1, -chunk_size):
+            for c in range(w - chunk_size,
+                           left_threshold,
+                           -chunk_size):
+                # One chunk is chunk_size square
+
+                # Randomly determine if we want to even do anything with this chunk
+                # Make it random but biased towards values with a greater x
+
+                adjusted_c = left_threshold
+                if (random() + (adjusted_c / w) > chunk_move_threshold) or force_chunk_trigger:
+                    # if True:
+                    t = 1 / (random() * (c / w) * 0.5)
+
+                    # This offset represents
+                    offset_amount = int((w / c))
+                    # print("offset amount", offset_amount)
+                    # The amount that the chunk has moved
+                    vert_offset = r - (chunk_size * offset_amount)
+                    horiz_offset = c + (chunk_size * offset_amount)
+
+                    if vert_offset == 0:
+                        continue
+
+                    # This bit adds a little bit of extra randomness to the offsets of each chunk.
+                    # If this isn't added, all chunks tend to fall along the chunk grid.
+                    # It should just need to be a tiny nudge.
+
+                    try:
+
+                        # Beyond just shifting pixels, this part tries to prettify the resulting image slightly.
+                        # TODO Consider using an alpha channel or just replacing changed pixels with white
+                        # or an average of the background color or smth.
+
+                        target_chunk_offset = int(random() * adjusted_c / 3)
+                        # Subtract because we want it to go up, negative y
+                        vert_offset -= target_chunk_offset
+                        horiz_offset += target_chunk_offset
+
+                        if vert_offset < 0:
+                            continue
+
+                        # Swap a target region on the temp image with the target chunk location on the original
+
+                        if (c / w) > 0.5:
+                            # Add a slight offset to where the chunks get swapped into.
+                            # Otherwise, it gets very crowded.
+
+                            tmp_r = r + int(random() * adjusted_c / 3)
+                            tmp_c = c + int(random() * adjusted_c / 3)
+
+                            # set a chunk in the new image to the pixels at the target chunk.
+                            cv2_image_tmp[tmp_r: tmp_r + chunk_size - 1, tmp_c:tmp_c + chunk_size - 1, :] = \
+                                cv2_img[vert_offset:vert_offset + chunk_size - 1,
+                                horiz_offset:horiz_offset + chunk_size - 1,
+                                :]  # correct
+
+                    except ValueError:
+                        # Tends to happen around threshold values which we don't care about anyway
+                        # TODO Removing this try/except might be a point to optimize
+                        pass
+
+                    try:
+                        target_chunk_offset = int(random() * c / 3)
+                        # Subtract because we want it to go up, negative y
+
+                        # Swap the target back first
+                        vert_offset -= target_chunk_offset
+                        horiz_offset += target_chunk_offset
+
+                        cv2_image_tmp[vert_offset:vert_offset + chunk_size - 1,
+                        horiz_offset:horiz_offset + chunk_size - 1, :] = \
+                            cv2_img[r:r + chunk_size - 1, c:c + chunk_size - 1, :]  # correct
+                        # Try to replace the new point with the value at the old one
+
+                        # Create a new offset value so we don't run into it looking too griddy
+                    except ValueError:
+                        pass
+
+        # Ideally this would be written out to a BytesIO object but it's hard to get that to work with openCV so
+        # this'll have to do
+        cv2.imwrite("test_out.png", cv2_image_tmp)
+
+        # cv2.imshow("test_out", cv2_image_tmp)
+        # cv2.waitKey(0)
+
+        return "test_out.png"
+
+    @staticmethod
+    def add_image_underneath(
+            base_image_path: Union[str, BytesIO],
+            overlay_fp: Union[str, BytesIO],
+            output_fp: Union[str, BytesIO]
+    ) -> Union[str, BytesIO]:
         """
         Add a template image underneath a base image, stretching out the template so that it fits.
         :param base_image_path: Image data, in bytes form or filepath form.
@@ -194,8 +352,13 @@ class Manips:
         resize_ratio = min(base_img.width/overlay_img.width, base_img.height/overlay_img.height)
 
         # Change the overlay_img to the width of the new image; .resize() just returns the image
-        overlay_img = overlay_img.resize((int(overlay_img.width * resize_ratio), int(overlay_img.height * resize_ratio)),
-                                         PIL.Image.ANTIALIAS)
+        overlay_img = overlay_img.resize(
+            (
+                int(overlay_img.width * resize_ratio),
+                int(overlay_img.height * resize_ratio)
+            ),
+            PIL.Image.ANTIALIAS
+        )
 
         # create a new blank canvas
         new_img = PIL.Image.new("RGB", (base_img.width, base_img.height + overlay_img.height))
@@ -206,23 +369,27 @@ class Manips:
 
         # Output to a file
         new_img.save(output_fp)
-        output = io.BytesIO()
+        output = BytesIO()
         new_img.save(output, format="PNG")
         new_img.seek(0)
         return output
 
     @staticmethod
-    def add_more_jpeg(base_path, output_path, quality=5):
+    def add_more_jpeg(
+            base_path: Union[str, BytesIO],
+            output_path: Union[str, BytesIO],
+            quality: int=5
+    ) -> None:
         base_img = PIL.Image.open(base_path)
         base_img.save(base_path, "JPEG", quality=quality)
         base_img.save(output_path, "JPEG", quality=quality)
-        if isinstance(base_path, io.BytesIO):
+        if isinstance(base_path, BytesIO):
             base_path.seek(0)
 
     @staticmethod
-    async def download_image_to_bytes(url):
-        img_bytes = io.BytesIO()
-        with aiohttp.ClientSession() as session:
+    async def download_image_to_bytes(url: str) -> BytesIO:
+        img_bytes = BytesIO()
+        async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 while True:
                     chunk = await resp.content.read(10)
@@ -233,9 +400,9 @@ class Manips:
         return img_bytes
 
     @staticmethod
-    async def download_image_to_file(url, dest_path):
+    async def download_image_to_file(url: str, dest_path: str) -> None:
         with open(dest_path, "wb") as outfile:
-            with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession() as session:
                 async with session.get(url) as resp:
                     while True:
                         chunk = await resp.content.read(10)
@@ -245,16 +412,9 @@ class Manips:
 
             outfile.seek(0)
 
-    async def add_jpeg(self, ctx, image_url):
-        image_url = await self._get_image_url(ctx, image_url)
-
-        dest_path = "{}.png".format(ctx.command.name)
-        async with ctx.typing():
-            base_bytes = await self.download_image_to_bytes(image_url)
-            self.add_more_jpeg(base_bytes, quality=randint(1, 2))
-        await ctx.send(file=discord.File(base_bytes, dest_path))
-
-    async def add_image_template(self, ctx, image_url, template):
+    async def add_image_template(
+            self, ctx: Context, image_url: str, template: str
+    ) -> None:
 
         image_url = await self._get_image_url(ctx, image_url)
 
@@ -267,17 +427,19 @@ class Manips:
         remove(dest_path)
 
     @staticmethod
-    def _get_avatar_url(user):
+    def _get_avatar_url(user: Member) -> str:
         """Pull the right avatar url type, since magick breaks down with .webp"""
-        if user.avatar.startswith("a"):
-            url = user.avatar_url_as(format="gif")
-        else:
-            url = user.avatar_url_as(format="png")
+        # if user.avatar.startswith("a"):
+        #     url = user.avatar_url_as(format="gif")
+        # else:
+        url = user.avatar_url_as(format="png")
 
         return url.split("?")[0]  # we really don't care about the size, chop it off
 
     @staticmethod
-    async def _get_image_url(ctx, image_url=None, ignore_own_avatar=False):
+    async def _get_image_url(
+            ctx: Context, image_url: str=None, ignore_own_avatar: bool=False
+    ) -> str:
         if image_url == "^":
             async for msg in ctx.message.channel.history(limit=1, before=ctx.message):
                 try:
@@ -301,7 +463,7 @@ class Manips:
             return Manips._get_avatar_url(ctx.message.author) if not ignore_own_avatar else None
 
     @staticmethod
-    def _list_templates():
+    def _list_templates() -> str:
         output = "Templates: \n%s"
         template_names = []
         for name in glob("templates/*"):
@@ -313,7 +475,7 @@ class Manips:
 
     @checks.sudo()
     @commands.command(aliases=["manip_flags", "manip_config"])
-    async def set_manip_flag(self, ctx, key: str, value: str):
+    async def set_manip_flag(self, ctx: Context, key: str, value: str) -> None:
         if key in self.VALID_PARAMS:
             self.config.hset("config:manips:params", key, value)
             self._parameter_cache[key] = value
@@ -323,7 +485,7 @@ class Manips:
 
     @checks.sudo()
     @commands.command()
-    async def think_mask(self, ctx, image_url: str):
+    async def think_mask(self, ctx: Context, image_url: str) -> None:
         image_url = await self._get_image_url(ctx, image_url, ignore_own_avatar=True)
         img = await self.download_image_to_bytes(await self._get_image_url(ctx, image_url))
         async with ctx.typing():
@@ -332,8 +494,10 @@ class Manips:
         remove(outfile)
 
     @checks.sudo()
-    @commands.command(hidden=True)
-    async def template(self, ctx, name: str, image_url: str=None):
+    @commands.command()
+    async def template(
+            self, ctx: Context, name: str, image_url: str=None
+    ) -> None:
         if name in ["help", "list"]:
             await ctx.send(self._list_templates())
             return
@@ -344,7 +508,9 @@ class Manips:
 
     @checks.sudo()
     @commands.command()
-    async def add_template(self, ctx, name: str, image_url: str=None):
+    async def add_template(
+            self, ctx: Context, name: str, image_url: str=None
+    ) -> None:
         fp = "templates/{}.png".format(name)
         image_url = await self._get_image_url(ctx, image_url, ignore_own_avatar=True)
         # Overlays should only ever be PNGs, let's make sure
@@ -356,9 +522,11 @@ class Manips:
             await ctx.send("Successfully added new template.")
 
     @commands.command()
-    async def angery(self, ctx, *, image_url: str=None):
-        rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="heavymanips",
-                                                 priority_blacklist=self.blacklisted_channels)
+    async def angery(self, ctx: Context, *, image_url: str=None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="heavymanips",
+            priority_blacklist=self.blacklisted_channels
+        )
 
         async with ctx.typing():
             image_url = await self._get_image_url(ctx, image_url)
@@ -369,11 +537,13 @@ class Manips:
         remove("angery.png")
 
     @commands.command()
-    async def needsmorejpeg(self, ctx, *, image_url: str=None):
+    async def needsmorejpeg(self, ctx: Context, *, image_url: str=None) -> None:
         """Do I look like I know what a jpeg is?"""
 
-        rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="manips",
-                                                 priority_blacklist=self.blacklisted_channels)
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="manips",
+            priority_blacklist=self.blacklisted_channels
+        )
         image_url = await self._get_image_url(ctx, image_url)
 
         async with ctx.typing():
@@ -383,10 +553,12 @@ class Manips:
         remove("more.jpeg")
 
     @checks.is_regular()
-    @commands.command(pass_context=True)
-    async def hammer(self, ctx, *, image_url: str = None):
-        rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="manips",
-                                                 priority_blacklist=self.blacklisted_channels)
+    @commands.command()
+    async def hammer(self, ctx: Context, *, image_url: str = None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="manips",
+            priority_blacklist=self.blacklisted_channels
+        )
 
         async with ctx.typing():
 
@@ -400,38 +572,46 @@ class Manips:
 
     @checks.is_regular()
     @commands.command()
-    async def ifunnify(self, ctx, image_url: str=None):
-        rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="manips",
-                                                 priority_blacklist=self.blacklisted_channels)
+    async def ifunnify(self, ctx: Context, image_url: str=None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="manips",
+            priority_blacklist=self.blacklisted_channels
+        )
 
         await self.add_image_template(ctx, image_url, "templates/ifunny.png")
 
     @checks.is_regular()
     @commands.command()
-    async def fugify(self, ctx, image_url: str=None):
-        rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="manips",
-                                                 priority_blacklist=self.blacklisted_channels)
+    async def fugify(self, ctx: Context, image_url: str=None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="manips",
+            priority_blacklist=self.blacklisted_channels
+        )
 
         await self.add_image_template(ctx, image_url, "templates/fug.png")
 
     @commands.command(hidden=True)
-    async def hotify(self, ctx, image_url: str=None):
+    async def hotify(self, ctx: Context, image_url: str=None) -> None:
         rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="manips")
         await self.add_image_template(ctx, image_url, "templates/thatshot.png")
 
     @checks.is_regular()
-    @commands.command(pass_context=True)
-    async def typing(self, ctx, image_url: str=None):
-        rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="manips",
-                                                 priority_blacklist=self.blacklisted_channels)
+    @commands.command()
+    async def typing(self, ctx: Context, image_url: str=None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="manips",
+            priority_blacklist=self.blacklisted_channels
+        )
 
         await self.add_image_template(ctx, image_url, "templates/typing.png")
 
     @checks.is_regular()
     @commands.command(hidden=True, enabled=False)
-    async def sunglasses(self, ctx, image_url: str=None):
-        rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="manips",
-                                                 priority_blacklist=self.blacklisted_channels)
+    async def sunglasses(self, ctx: Context, image_url: str=None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="manips",
+            priority_blacklist=self.blacklisted_channels
+        )
         image_url = await self._get_image_url(ctx, image_url)
         async with ctx.typing():
             base_bytes = await self.download_image_to_bytes(image_url)
@@ -441,9 +621,21 @@ class Manips:
 
     @checks.is_regular()
     @commands.command()
-    async def rad_blur(self, ctx, image_url: str=None):
-        rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="manips",
-                                                 priority_blacklist=self.blacklisted_channels)
+    async def dissolve(self, ctx: Context, image_url: str=None) -> None:
+        image_url = await self._get_image_url(ctx, image_url)
+        async with ctx.typing():
+            base_bytes = await self.download_image_to_bytes(image_url)
+            fp = self.disintegrate(base_bytes)
+
+            await ctx.send(file=discord.File(fp))
+
+    @checks.is_regular()
+    @commands.command()
+    async def rad_blur(self, ctx: Context, image_url: str=None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="manips",
+            priority_blacklist=self.blacklisted_channels
+        )
 
         image_url = await self._get_image_url(ctx, image_url)
 
@@ -452,14 +644,14 @@ class Manips:
             with CustomImage(file=base_bytes) as img:
                 rotation = int(self._parameter_cache.get("rad_blur_degrees", 10))
                 img.radial_blur(rotation)
-                f = io.BytesIO()
+                f = BytesIO()
                 img.save(file=f)
                 f.seek(0)
 
         await ctx.send(file=discord.File(f, filename="blur.png"))
 
     @commands.command()
-    async def cas(self, ctx, image_url: str=None):
+    async def cas(self, ctx: Context, image_url: str=None) -> None:
         rate_limits.MemeCommand.check_rate_limit(ctx, cooldown_group="manips",
                                                  priority_blacklist=self.blacklisted_channels)
 
@@ -472,12 +664,12 @@ class Manips:
                 original_height = img.height
                 img.liquid_rescale(int(img.width // intensity), int(img.height // intensity))
                 img.liquid_rescale(original_width, original_height)
-                f = io.BytesIO()
+                f = BytesIO()
                 img.save(file=f)
                 f.seek(0)
 
         await ctx.send(file=discord.File(f, filename="blur.png"))
 
 
-def setup(bot):
+def setup(bot: Bot) -> None:
     bot.add_cog(Manips(bot))

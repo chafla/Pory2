@@ -1,26 +1,32 @@
-from discord.ext import commands
-import discord
-import random
-from .utils import messages, checks, config, rate_limits, utils
-from urllib.parse import urlencode
+
 import datetime
-from asyncio import sleep
+import glob
+import random
 import re
 import os
 
-import glob
-
 from os import path
+from datetime import datetime
+from typing import Dict, Tuple, Union, Optional
+
+import discord
+from asyncio import sleep
+from discord import Guild, Message, Role, Member, DMChannel
+from discord.ext import commands
+from discord.ext.commands import Context, Bot
+
+from .utils import messages, checks, config, rate_limits, utils
+from urllib.parse import urlencode
 
 
-def num_emoji(num):
+def num_emoji(num: int) -> str:
     return "{}⃣".format(num)
 
 
 class Rollable:
     """Small type to allow for a few different inputs"""
 
-    def __init__(self, argument):
+    def __init__(self, argument: str) -> None:
         cleaned_arg = argument.strip("d")  # e.g. d4
         try:
             self.value = int(cleaned_arg)
@@ -30,13 +36,13 @@ class Rollable:
             else:
                 raise commands.BadArgument("Could not convert parameter `sides` to type 'int'.")
 
-    def __int__(self):
+    def __int__(self) -> int:
         return self.value
 
 
 class DHMSTimestamp:
 
-    def __init__(self, argument):
+    def __init__(self, argument: str) -> None:
 
         self.timestamp = str(argument)
         self.seconds = self.timestamp_to_seconds(argument)
@@ -45,7 +51,7 @@ class DHMSTimestamp:
             raise commands.BadArgument
 
     @staticmethod
-    def timestamp_to_seconds(timestamp):
+    def timestamp_to_seconds(timestamp: str) -> Optional[int]:
         """Take in a time in _h_m_s format"""
         units = {
             "d": 86400,
@@ -63,7 +69,7 @@ class DHMSTimestamp:
         return seconds
 
     @staticmethod
-    def seconds_to_timestamp(seconds):
+    def seconds_to_timestamp(seconds: int) -> str:
         """Get a number of seconds and return a timestamp formatted in
         dhms format, excluding leading zero values."""
         days = seconds // 86400
@@ -85,25 +91,25 @@ class Countdown:
     """General use commands"""
 
     @staticmethod
-    def date_diff_in_seconds(date1, date2):
+    def date_diff_in_seconds(date1: datetime, date2: datetime) -> int:
         timedelta = date2 - date1
         return timedelta.days * 24 * 3600 + timedelta.seconds
 
     @staticmethod
-    def _format_from_seconds(seconds):
+    def _format_from_seconds(seconds: int) -> Tuple[int, int, int, int]:
         minutes, seconds = divmod(seconds, 60)
         hours, minutes = divmod(minutes, 60)
         days, hours = divmod(hours, 24)
         return days, hours, minutes, seconds
 
     @staticmethod
-    def seconds_remaining(timestamp):
+    def seconds_remaining(timestamp: str) -> Union[float, None]:
         """
         Get timedelta string from a formatted timestamp.
         :return Amount of seconds remaining until the countdown, or None if the countdown has finished.
         """
-        ending = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
-        now = datetime.datetime.now()
+        ending = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+        now = datetime.now()
         if ending < now:
             return None
         else:
@@ -111,12 +117,14 @@ class Countdown:
             return timedelta.total_seconds()
 
     @staticmethod
-    def format_time_remaining(seconds):
+    def format_time_remaining(seconds: int) -> str:
         timedelta = Countdown._format_from_seconds(seconds)
         return "%d days, %d hours, %d minutes, %d seconds".format(timedelta)
 
     @staticmethod
-    async def create_countdown(name, message, timestamp, ctx):
+    async def create_countdown(
+            name: str, message: str, timestamp: str, ctx: Context
+    ) -> Dict[str, Union[str, datetime, int, bool]]:
         """
         Save a countdown to the datafile
         :param name: Name of the countdown
@@ -144,7 +152,7 @@ class Countdown:
 class General:
     """General commands"""
 
-    def __init__(self, bot):
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.countdowns = config.Config("countdowns.json")
         self.happenings = []
@@ -152,22 +160,22 @@ class General:
         self.config = self.bot.config
 
     @property
-    def r_pkmn(self):
+    def r_pkmn(self) -> Guild:
         return self.bot.get_guild(111504456838819840)
 
     @property
-    def verified_role(self):
+    def verified_role(self) -> Role:
         return discord.utils.get(self.r_pkmn.roles, id=349077573977899011)
 
-    def _is_verified(self, ctx):
-        if isinstance(ctx.message.channel, discord.DMChannel):  # actually a user, meaning it's in DMs
+    def _is_verified(self, ctx: Context) -> bool:
+        if isinstance(ctx.message.channel, DMChannel):  # actually a user, meaning it's in DMs
             return True
         elif ctx.message.author.guild == self.r_pkmn:
             return self.verified_role in ctx.message.author.roles
         else:
             return self.config.get("user:{}:logs:enabled".format(ctx.message.author.id)) is True
 
-    async def check_verification(self, ctx):
+    async def check_verification(self, ctx: Context) -> bool:
         verification = self._is_verified(ctx)
         if verification:
             return True
@@ -180,7 +188,7 @@ class General:
             return False
 
     @commands.command()
-    async def ping(self, ctx):
+    async def ping(self, ctx: Context) -> None:
         response = await ctx.send("Pong!")
 
         dif = (response.created_at - ctx.message.created_at).total_seconds() * 1000
@@ -190,7 +198,7 @@ class General:
     @checks.not_rmd()
     @checks.not_pmdnd()
     @commands.command(aliases=["rolld"])
-    async def roll(self, ctx, sides: Rollable, rolls: int=1):
+    async def roll(self, ctx: Context, sides: Rollable, rolls: int=1) -> None:
         """Roll a die, or a few."""
 
         sides = sides.value
@@ -218,13 +226,13 @@ class General:
             await ctx.send(output)
 
     @commands.command(aliases=["thinking"])
-    async def think(self, ctx, *, text: str):
+    async def think(self, ctx: Context, *, text: str) -> None:
         """:thinking:"""
         await ctx.send(messages.think_message.format(text))
 
     @checks.sudo()
     @commands.command()
-    async def status(self, ctx):
+    async def status(self, ctx: Context) -> None:
 
         embed = discord.Embed(title="Current bot status",
                               description="Uptime: {}".format(DHMSTimestamp.seconds_to_timestamp(self.bot.secs)))
@@ -237,7 +245,7 @@ class General:
 
     @checks.sudo()
     @commands.command()
-    async def counters(self, ctx):
+    async def counters(self, ctx: Context) -> None:
         counters = self.bot.config.zrevrange("misc:rate_limits:counters", 0, -1, withscores=True,
                                              score_cast_func=int)
         embed = discord.Embed(description="Meme command counters", color=discord.Color.blue())
@@ -249,11 +257,11 @@ class General:
         await ctx.send(embed=embed, content=None)
 
     @commands.command()
-    async def why(self, ctx):
+    async def why(self, ctx: Context) -> None:
         await ctx.send("https://www.youtube.com/watch?v=flL5b1NaSPE")
 
     @commands.command()
-    async def userinfo(self, ctx, member: discord.Member=None):
+    async def userinfo(self, ctx: Context, member: Member=None) -> None:
         """Get a user's information"""
 
         if member is None:
@@ -279,7 +287,7 @@ class General:
         await ctx.send(embed=embed)
 
     @commands.command(hidden=True)
-    async def userinfo_simple(self, ctx, *, member: discord.Member=None):
+    async def userinfo_simple(self, ctx: Context, *, member: Member=None) -> None:
         """Simple userinfo to aid mobile users"""
 
         if not member:
@@ -301,13 +309,13 @@ class General:
         await ctx.send('\n'.join(params))
 
     @commands.command()
-    async def lmgtfy(self, ctx, *, link: str):
+    async def lmgtfy(self, ctx: Context, *, link: str) -> None:
         """Gives a lmgtfy link to an input."""
         params = {"q": link}
         await ctx.send("http://lmgtfy.com/?{0}".format(urlencode(params)))
 
     @commands.group(invoke_without_command=True)
-    async def countdown(self, ctx, name: str):
+    async def countdown(self, ctx: Context, name: str) -> None:
         """Show the time left for a countdown"""
         countdown = self.countdowns.get(name)
         if countdown is None:
@@ -320,19 +328,21 @@ class General:
 
     @checks.is_regular()
     @countdown.command()
-    async def add(self, ctx, name: str, timestamp: str, *, description: str):
+    async def add(
+            self, ctx: Context, name: str, timestamp: str, *, description: str
+    ) -> None:
         """Add a countdown. Format: `[name] | [YYYY-MM-DD HH:MM:SS] | [desc]`"""
 
         countdown = await Countdown.create_countdown(name, description, timestamp, ctx)
         await self.countdowns.put(name, countdown.copy())
 
     @add.error
-    async def add_error(self, ctx, error):
+    async def add_error(self, ctx: Context, error: Exception) -> None:
         if type(error) == RuntimeError:
             await ctx.send(error)
 
     @countdown.command()
-    async def list(self, ctx):
+    async def list(self, ctx: Context) -> None:
         """List active countdowns."""
         output = ""
         for name in self.countdowns:
@@ -342,7 +352,7 @@ class General:
         await ctx.send(output)
 
     @staticmethod
-    def timestamp_to_seconds(timestamp):
+    def timestamp_to_seconds(timestamp: str) -> Optional[int]:
         """Take in a time in _h_m_s format"""
         units = {
             "d": 86400,
@@ -361,7 +371,7 @@ class General:
 
     @checks.is_regular()
     @commands.command()
-    async def timer(self, ctx, timestamp: DHMSTimestamp, *, name: str=None):
+    async def timer(self, ctx: Context, timestamp: DHMSTimestamp, *, name: str=None) -> None:
         """Format: !timer time(HH:MM:SS) [name]"""
         seconds = timestamp.seconds
         if seconds is None or seconds == 0:
@@ -379,7 +389,7 @@ class General:
         await ctx.send(output)
 
     @staticmethod
-    def role_check(ctx):
+    def role_check(ctx: Context) -> bool:
         """Check for certain roles, based on servers. Hardcoded."""
         if ctx.message.channel.id == 278043765082423296:
             return discord.utils.find(lambda r: r.id in [198275910342934528, 117242433091141636],
@@ -389,7 +399,7 @@ class General:
 
     # This command causes crashes due to trying to load too much at once, so it's disabled for now.
     @commands.command(enabled=False)
-    async def quote_roulette(self, ctx):
+    async def quote_roulette(self, ctx: Context) -> None:
 
         size_thresh_kb = 200  # Minimum size for logfiles to be chosen.
         rate_limits.MemeCommand.check_rate_limit(ctx, 200)
@@ -434,7 +444,8 @@ class General:
                                                                                           num_chosen + 1,
                                                                                           chosen[num_chosen][1])
 
-        msg = await self.bot.get_message(ctx.message.channel, msg.id)  # Update the message object
+        # msg = await self.bot.get_message(ctx.message.channel, msg.id)  # Update the message object
+        msg = await ctx.message.channel.get_message(msg.id)
 
         # Get the users that guessed correctly
 
@@ -460,7 +471,7 @@ class General:
 
     @checks.sudo()
     @commands.command()
-    async def happening(self, ctx, timestamp: str):
+    async def happening(self, ctx: Context, timestamp: str) -> None:
         """It's habbening"""
         seconds = self.timestamp_to_seconds(timestamp)
         if seconds is None or seconds == 0:
@@ -481,21 +492,21 @@ class General:
             await ctx.send(img)
 
     @commands.command()
-    async def lenny(self, ctx):
+    async def lenny(self, ctx: Context) -> None:
         await ctx.send("( ͡° ͜ʖ ͡°)")
 
     @commands.command()
-    async def loony(self, ctx):
+    async def loony(self, ctx: Context) -> None:
         await ctx.send("`( ͡° ͜ʖ ͡°)`")
 
     @commands.command(hidden=True)
-    async def eroge(self, ctx):
+    async def eroge(self, ctx: Context) -> None:
         await ctx.send("I'm not going to ruin your day but I am an eroge artist and a professional on the field of "
                        "sex and I can tell you that 4 hours is not normal and you should check it out with a "
                        "doctor")
 
     @commands.command()
-    async def get_wc(self, ctx, *, user: str = None):
+    async def get_wc(self, ctx: Context, *, user: str=None) -> None:
         """Get a wordcloud comprised of a user's history"""
         message = ctx.message
         if await self.check_verification(ctx) and rate_limits.MemeCommand.check_rate_limit(ctx, 15):
@@ -515,7 +526,7 @@ class General:
 
     # noinspection PyTypeChecker
     @commands.command()
-    async def pickup(self, ctx, *, target: str):
+    async def pickup(self, ctx: Context, *, target: str) -> None:
         """Pick up an item from someone."""
         if rate_limits.MemeCommand.check_rate_limit(ctx, 30):
             item = random.random()
@@ -543,7 +554,7 @@ class General:
                     await ctx.send("You activated {0}'s Itemizer Orb, turning you into a {1}!".format(
                                                   target, line_chosen[:-1]))
 
-    async def on_timer_update(self, seconds):
+    async def on_timer_update(self, seconds: int) -> None:
         if seconds % 10 == 0:
             # Check for countdowns expiring
             for name in self.countdowns:
@@ -556,8 +567,10 @@ class General:
                     countdown["completed"] = True
                     await self.countdowns.put(name, countdown)
 
-    async def on_message(self, message):
-        if len(message.mentions) > 0 and message.mentions[0].id == self.bot.user.id and "boo" in message.content.lower():
+    async def on_message(self, message: Message) -> None:
+        if len(message.mentions) > 0 \
+                and message.mentions[0].id == self.bot.user.id \
+                and "boo" in message.content.lower():
             await sleep(1)
             await message.channel.send("No boo {} {}".format("u" * self.bot.boo_counter,
                                                              message.author.mention))
@@ -566,5 +579,5 @@ class General:
             self.boo_counter += 1
 
 
-def setup(bot):
+def setup(bot: Bot) -> None:
     bot.add_cog(General(bot))

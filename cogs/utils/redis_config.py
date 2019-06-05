@@ -28,6 +28,8 @@ class RedisConfig(redis.StrictRedis):
             return True
         elif response == "False":
             return False
+        elif response == "None":
+            return None
         elif command_name in self.response_callbacks:
             return self.response_callbacks[command_name](response, **options)
         return response
