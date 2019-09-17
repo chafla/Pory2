@@ -205,12 +205,9 @@ class Markov:
 
         for user_id in member_ids:
             try:
-                # You don't close the files. How naughty.
-                g = (
-                    open("message_cache/users/{0}.txt".format(user_id),
-                         "r", encoding="utf-8")
-                ).read()
-                models.append(markovify.NewlineText(g, state_size=2))
+                with open("message_cache/users/{0}.txt".format(user_id), "r", encoding="utf-8") as f:
+                    models.append(markovify.NewlineText(f.read(), state_size=2))
+
             except FileNotFoundError:
                 pass
 

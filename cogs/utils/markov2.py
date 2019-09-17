@@ -1,22 +1,25 @@
 import random
 
+from io import StringIO
+from typing import List, Generator, Tuple, TextIO, Union
 
-class Markov(object):
 
-    def __init__(self, open_file):
+class Markov:
+
+    def __init__(self, open_file: Union[TextIO, StringIO]) -> None:
         self.cache = {}
         self.open_file = open_file
         self.words = self.file_to_words()
         self.word_size = len(self.words)
         self.database()
 
-    def file_to_words(self):
+    def file_to_words(self) -> List[str]:
         self.open_file.seek(0)
         data = self.open_file.read()
         words = data.split()
         return words
 
-    def triples(self):
+    def triples(self) -> Generator[Tuple[str, str, str], None, None]:
         """ Generates triples from the given data string. So if our string were
                 "What a lovely day", we'd generate (What, a, lovely) and then
                 (a, lovely, day).
@@ -28,7 +31,7 @@ class Markov(object):
         for i in range(len(self.words) - 2):
             yield (self.words[i], self.words[i+1], self.words[i+2])
 
-    def database(self):
+    def database(self) -> None:
         for w1, w2, w3 in self.triples():
             key = (w1, w2)
             if key in self.cache:
@@ -36,7 +39,7 @@ class Markov(object):
             else:
                 self.cache[key] = [w3]
 
-    def generate_markov_text(self, size=25):
+    def generate_markov_text(self, size: int=25) -> str:
         seed = random.randint(0, self.word_size-3)
         seed_word, next_word = self.words[seed], self.words[seed+1]
         w1, w2 = seed_word, next_word

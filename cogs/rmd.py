@@ -1,28 +1,6 @@
 """Basic commands for /r/MysteryDungeon"""
 from discord.ext import commands
-import discord
 from .utils.rate_limits import MemeCommand
-
-team_aliases = {
-    "BRT/RRT Rescuer": "BRT/RRT Rescuer",
-    "EoD/T/S Rescuer": "EoD/T/S Rescuer",
-    "BRT/RRT": "BRT/RRT Rescuer",
-    "BRT": "BRT/RRT Rescuer",
-    "RRT": "BRT/RRT Rescuer",
-    "EoD/T/S": "EoD/T/S Rescuer",
-    "Sky": "EoD/T/S Rescuer",
-    "GtI": "GtI Rescuer",
-    "WAKE ME UP INSIDE": "GtI Rescuer",
-    "GtI Rescuer": "GtI Rescuer",
-    "fuck le gates to inshitity": "GtI Rescuer",
-    "PSMD": "PSMD_null",
-    "PSMD Rescuer": "PSMD_null",
-    "EU PSMD": "EU PSMD Rescuer",
-    "EU PSMD Rescuer": "EU PSMD Rescuer",
-    "NA PSMD": "NA PSMD Rescuer",
-    "NA PSMD Rescuer": "NA PSMD Rescuer",
-
-}
 
 
 class RMD:

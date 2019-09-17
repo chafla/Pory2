@@ -202,7 +202,7 @@ class PMs:
 
     @checks.sudo()
     @commands.command(no_pm=True)
-    async def register_role(self, ctx, role_name: str, role_title: str, guild_id: int=None):
+    async def register_role(self, ctx, role_name: str, role_title: str, guild_id: int = None):
         """
         Register a new role to be addable by !set.
         role_name: Full name of the role, surrounded by ""
@@ -236,6 +236,32 @@ class PMs:
         self.config.hset("guild:{}:roles:all:names".format(guild.id), role_title, role_id)
 
         await ctx.send("New role '{}' registered with keyword '{}'".format(role_name, role_title))
+
+    @checks.sudo()
+    @commands.command()
+    async def deregister_role(self, ctx, role_title: str, guild_id: int = None):
+        """
+        Remove a role that's been registered by !register_role.
+        role_title: title of the role to add, surrounded by "".
+        guild_id: Optional, guild in which the role exists.
+        """
+
+        if guild_id is None:
+            guild = ctx.guild
+            guild_id = guild.id
+        else:
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                await ctx.send("Couldn't find the guild provided.")
+                return
+
+        role_key = "guild:{}:roles:roles:{}".format(guild_id, role_title.lower())
+        if self.config.exists(role_key):
+            self.config.remove(role_key)
+            self.config.hdel("guild:{}:roles:all:names".format(guild_id), role_title)
+            await ctx.send("Role '{}' was deregistered.".format(role_title))
+        else:
+            await ctx.send("The given role doesn't exist in the specified guild.")
 
     @staticmethod
     async def check_user_verification(user, guild):
@@ -342,39 +368,39 @@ class PMs:
 
         else:  # Things get complicated. From here, it's mostly just message management.
 
-                base_message = "Oops, looks like I share more than one server with you. Which server would you like " \
-                               "to update your role in? Reply with the digit of the server, or 'exit' to cancel.\n"
+            base_message = "Oops, looks like I share more than one server with you. Which server would you like " \
+                           "to update your role in? Reply with the digit of the server, or 'exit' to cancel.\n"
 
-                for i, svr in enumerate(guilds_shared, start=1):
-                    base_message += "{0}: {1.name}\n".format(i, svr)
+            for i, svr in enumerate(guilds_shared, start=1):
+                base_message += "{0}: {1.name}\n".format(i, svr)
 
-                await ctx.send(base_message)
+            await ctx.send(base_message)
 
-                # Wait for the message that the user sends back.
-                # It should be an int.
+            # Wait for the message that the user sends back.
+            # It should be an int.
 
-                tries_remaining = 3
+            tries_remaining = 3
 
-                while tries_remaining > 0:
+            while tries_remaining > 0:
 
-                    response_msg = await self.bot.wait_for("message", check=message_check, timeout=600)
+                response_msg = await self.bot.wait_for("message", check=message_check, timeout=600)
 
-                    if response_msg is None:
-                        return None
+                if response_msg is None:
+                    return None
 
-                    elif response_msg.content == 'exit':
-                        return None
+                elif response_msg.content == 'exit':
+                    return None
 
-                    selection = int(response_msg.content)
+                selection = int(response_msg.content)
 
-                    # + 1 because we already start from 1
-                    if not 0 < selection < len(guilds_shared) + 1:
-                        await ctx.send("That number was out of range, try again.")
-                        tries_remaining -= 1
-                        continue
-                    else:
-                        server = guilds_shared[(int(selection) - 1)]
-                        return server
+                # + 1 because we already start from 1
+                if not 0 < selection < len(guilds_shared) + 1:
+                    await ctx.send("That number was out of range, try again.")
+                    tries_remaining -= 1
+                    continue
+                else:
+                    server = guilds_shared[(int(selection) - 1)]
+                    return server
 
     @checks.sudo()
     @commands.command(no_pm=True)
@@ -493,7 +519,7 @@ class PMs:
 
     @checks.sudo()
     @commands.command(no_pm=True)
-    async def unroleban(self, ctx: Context, target: Member, role_title: str, *, reason: str="None given."):
+    async def unroleban(self, ctx: Context, target: Member, role_title: str, *, reason: str = "None given."):
         """
         Rescind a user's role-ban.
         """

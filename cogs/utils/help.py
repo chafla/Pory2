@@ -84,7 +84,12 @@ class Help(formatter.HelpFormatter):
             if self.is_cog() or self.is_bot():
                 name = '{}{}'.format(self.clean_prefix, name)
 
-            entries += '**{}{}**   {}\n'.format(name, ":" if command.short_doc else "", command.short_doc)
+            new_entry = '**{}{}**   {}\n'.format(name, ":" if command.short_doc else "", command.short_doc)
+            if len(new_entry + entries) > 1020:
+                entries += "..."  # TODO This should be paginated
+                return entries
+            else:
+                entries += new_entry
         return entries
 
     def get_command_signature(self):
@@ -105,7 +110,8 @@ class Help(formatter.HelpFormatter):
         # All default values for embed dict
         self.command = command
         self.context = ctx
-        emb = {
+        embs = []
+        base_emb = {
             'embed': {
                 'title': '',
                 'description': '',
@@ -116,13 +122,18 @@ class Help(formatter.HelpFormatter):
             'fields': []
         }
 
-        description = command.description if not self.is_cog() else inspect.getdoc(command)
-        if not description == '' and description is not None:
-            description = '*{0}*'.format(description)
+        emb = base_emb.copy()
+        emb["fields"] = []  # Ensure we don't hang onto a pointer
 
-        if description:
-            # <description> portion
-            emb['embed']['description'] = description
+        if not embs:  # Only run it for the first embed
+
+            description = command.description if not self.is_cog() else inspect.getdoc(command)
+            if not description == '' and description is not None:
+                description = '*{0}*'.format(description)
+
+            if description:
+                # <description> portion
+                emb['embed']['description'] = description
 
         if isinstance(command, discord.ext.commands.core.Command):
             # <signature portion>
@@ -152,6 +163,8 @@ class Help(formatter.HelpFormatter):
         def category(tup):
             # Turn get cog (Category) name from cog/list tuples
             cog = tup[1].cog_name
+            if cog is None:
+                cog = getattr(tup[1], "help_category", None)
             return '**__{}:__**'.format(cog) if cog is not None else '**__\u200bNo Category:__**'
 
         # Get subcommands for bot or category
@@ -169,6 +182,8 @@ class Help(formatter.HelpFormatter):
                 if len(commands) > 0:
                     field['name'] = category
                     field['value'] = self._add_subcommands(commands)  # May need paginated
+                    if len(field['value']) > 1024:
+                        field['value'] = field['value'][:1019] + "..."
                     emb['fields'].append(field)
 
         else:

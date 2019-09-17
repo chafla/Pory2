@@ -3,6 +3,7 @@ Some utilities for downloading/dealing with audio.
 """
 
 import youtube_dl
+from uuid import uuid4
 import concurrent.futures
 import logging
 

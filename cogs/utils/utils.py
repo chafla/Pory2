@@ -1,39 +1,40 @@
-import re
-import discord
-import time
+
 import aiohttp
-from io import StringIO
-from discord.ext import commands
 import random
+import re
+import time
 
-# from discord.ext.commands import HelpFormatter
+from io import StringIO, BytesIO
+from typing import List, Tuple, Union
 
-# TODO Re-create the help formatter
-"""
-class Formatter(HelpFormatter):
-
-    def __init__(self, *args, **kwargs):
-        super(*args, **kwargs)
-     super(*args, **kwargs)
-     
-"""
+import discord
+from discord.ext import commands
 
 
-def extract_mentions(text, message):
+def extract_mentions(text: str, message: discord.Message) -> str:
     """Extract mentions in text and replace them with usernames"""
-    mentions_found = re.findall(r'(<@!?&?\d{17,18}>)', text)  # Extract mentions from the input
-    ids_found = re.findall(r'(\d{17,18})', text)  # Extract mentions from the input, but get the IDs.
+
+    # Extract mentions from the input
+    mentions_found = re.findall(r'(<@!?&?\d{17,18}>)', text)
+
+    # Extract mentions from the input, but get the IDs.
+    ids_found = re.findall(r'(\d{17,18})', text)
+
     if mentions_found:
         for num, mention in enumerate(mentions_found):
-            member_mentioned = discord.utils.get(message.guild.members, id=ids_found[num])
+            member_mentioned = discord.utils.get(
+                message.guild.members, id=ids_found[num]
+            )
             if member_mentioned is not None:
-                text = text.replace(mention, member_mentioned.name)  # Assigning it to the str.replace was crucial here
+                # Assigning it to the str.replace was crucial here
+                text = text.replace(mention, member_mentioned.name)
             else:
                 text = text.replace(mention, "[somebody]")
+
     return text
 
 
-def check_ids(text):
+def check_ids(text: str) -> bool:
     """Check for IDs"""
     id_found = re.search(r'(\d{17,18})', text)
     if id_found and id_found.group(0) is not None:
@@ -42,7 +43,7 @@ def check_ids(text):
         return False
 
 
-def check_mentions(text):
+def check_mentions(text: str) -> Union[bool, str]:  # TODO: Update docstr for typing
     """
     Check message for mentions
     :param text: Input
@@ -55,7 +56,7 @@ def check_mentions(text):
         return False
 
 
-def check_urls(text):
+def check_urls(text: str) -> Union[bool, str]:  # TODO: Update docstr for typing
     """
     Check message for urls
     :param text: Input
@@ -69,7 +70,7 @@ def check_urls(text):
         return False
 
 
-def check_input(text):
+def check_input(text: str) -> Union[bool, str]:  # TODO: Update docstr for typing
     """
     Check text for certain components which we don't really want to end up in messages, such as mentions or urls.
     Does not do any actual parsing.
@@ -80,12 +81,12 @@ def check_input(text):
     return check_mentions(text) or check_urls(text)
 
 
-def get_timestamp():
+def get_timestamp() -> str:
     now = time.localtime()
     return time.strftime("%a %b %d, %Y at %H:%M %Z", now)
 
 
-def format_list(items):
+def format_list(items: List[str]) -> str:  # TODO: ", ".join([items])
     """Dealing with lists and commas."""
     output = ""
     for num, item in enumerate(items):
@@ -95,7 +96,7 @@ def format_list(items):
     return output
 
 
-async def download_image(url, file_path):
+async def download_image(url: str, file_path: Union[bytes, str, BytesIO]) -> None:
     is_bytes = False
     if isinstance(file_path, str):
         fd = open(file_path, "wb")
@@ -104,7 +105,7 @@ async def download_image(url, file_path):
         fd = file_path
 
     try:
-        with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 while True:
                     chunk = await resp.content.read(10)
@@ -119,9 +120,20 @@ async def download_image(url, file_path):
             fd.close()
 
 
+def embed_from_dict(obj: dict, **embed_args) -> discord.Embed:
+    embed = discord.Embed(**embed_args)
+    if obj is not None:
+        for k, v in obj.items():
+            # trim keys and values so we're less likely to make our embeds too long.
+            key_trimmed = str(k) if len(str(k)) < 256 else "{}...".format(k[:253])
+            value_trimmed = str(v) if len(str(v)) < 256 else "{}...".format(v[:253])
+            embed.add_field(name=key_trimmed, value=value_trimmed)
+    return embed
+
+
 class UserType:
 
-    def __init__(self, argument):
+    def __init__(self, argument: Union[discord.Member, str, int]) -> None:
 
         if isinstance(argument, discord.Member):
             self.user_id = argument.id
@@ -133,15 +145,19 @@ class UserType:
 
 class Paginator:
 
-    def __init__(self, page_limit=1000, trunc_limit=2000, headers=None, header_extender=u'\u200b'):
+    def __init__(
+            self, page_limit: int=1000, trunc_limit: int=2000,
+            headers=None, header_extender: str=u'\u200b'
+    ) -> None:
         self.page_limit = page_limit
         self.trunc_limit = trunc_limit
         self._pages = None
+        self._headers = None
         self._header_extender = header_extender
         self.set_headers(headers)
 
     @property
-    def pages(self):
+    def pages(self) -> Union[List[str], List[Tuple[str, str]]]:
         if self._headers:
             self._extend_headers(len(self._pages))
             headers, self._headers = self._headers, None
@@ -149,23 +165,23 @@ class Paginator:
         else:
             return self.pages
 
-    def set_headers(self, headers=None):
+    def set_headers(self, headers: str=None):
         self._headers = headers
 
-    def set_header_extender(self, header_extender: str=u'\u200b'):
+    def set_header_extender(self, header_extender: str=u'\u200b') -> None:
         self._header_extender = header_extender
 
-    def _extend_headers(self, length: int):
+    def _extend_headers(self, length: int) -> None:
         while len(self._headers) < length:
             self._headers.append(u'\u200b')
 
-    def set_trunc_limit(self, limit: int=2000):
+    def set_trunc_limit(self, limit: int=2000) -> None:
         self.trunc_limit = limit
 
-    def set_page_limit(self, limit: int=1000):
+    def set_page_limit(self, limit: int=1000) -> None:
         self.page_limit = limit
 
-    def paginate(self, value):
+    def paginate(self, value: str) -> Union[List[str], List[Tuple[str, str]]]:
         """
         To paginate a string into a list of strings under
         `self.page_limit` characters. Total len of strings
@@ -208,18 +224,18 @@ class Paginator:
         return self.pages
 
 
-def create_quick_embed(name, value, **embed_kwargs):
+def create_quick_embed(name: str, value: str, **embed_kwargs) -> discord.Embed:
     embed = discord.Embed(**embed_kwargs)
     embed.add_field(name=name, value=value)
     return embed
 
 
-async def get_text_from_pastebin(url):
+async def get_text_from_pastebin(url: str) -> StringIO:
     """Get raw text from a pastebin url"""
     url_id = re.findall("https?://pastebin\.com/(\w{8})", url)[0]  # The error will happen, let's allow it
     fd = StringIO()
 
-    with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
         async with session.get("https://pastebin.com/raw/{}".format(url_id)) as resp:
             fd.write(await resp.text())
 
@@ -227,11 +243,11 @@ async def get_text_from_pastebin(url):
     return fd
 
 
-async def get_text_from_upload(attachment_url):
+async def get_text_from_upload(attachment_url: str) -> StringIO:
     """Get raw text from a pastebin url"""
     fd = StringIO()
 
-    with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
         async with session.get(attachment_url) as resp:
             fd.write(await resp.text())
 
@@ -239,7 +255,18 @@ async def get_text_from_upload(attachment_url):
     return fd
 
 
-def generate_fhyr_text(string):
+def generate_furry_text(string: str) -> str:
+    """
+    Generate some fuwwy speech uwu
+    """
+
+    string = re.sub("[rl]", "w", string, re.IGNORECASE)
+    string = re.sub("th", "ff", string, re.IGNORECASE)
+    string = re.sub("v", "b", string, re.IGNORECASE)
+    string = re.sub(" the ", " da ", string, re.IGNORECASE)
+
+
+def generate_fhyr_text(string: str) -> str:
     """
     Translate a string of text into fhyr lucario
     """

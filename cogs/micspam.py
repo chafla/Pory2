@@ -144,7 +144,7 @@ class Micspam:
 
     async def on_message(self, message):
         # TODO FIX THIS NASTY HACK
-        if message.guild is not None and message.guild.id in [274731851661443074, 283101596806676481, 401182039421747210, 78716585996455936, 146626123990564864, 392161981261545473]\
+        if message.guild is not None and message.guild.id in [274731851661443074, 283101596806676481, 401182039421747210, 78716585996455936, 146626123990564864, 392161981261545473, 484966083795746816]\
                 and "owo" in message.content.lower() and message.author.voice is not None:
             await self.play_micspam(message.author.voice.channel.name,
                                     random.choice([2, 10, 19, 22, 29, 34, 38]),

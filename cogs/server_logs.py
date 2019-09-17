@@ -131,7 +131,7 @@ class ServerLogs:
             log.exception("Exception occurred when sending embed.\nParams:\n{}".format(embed.fields))
 
     @staticmethod
-    def format_embed(embed, user):
+    def format_embed(embed: discord.Embed, user) -> discord.Embed:
         """Do basic formatting on the embed"""
         embed.set_author(name=user.name, icon_url=user.avatar_url)
         embed.add_field(name="User ID", value=user.id)

@@ -24,6 +24,7 @@ import discord
 
 from discord.ext import commands
 from discord.ext.commands import Bot, Context
+from discord.ext.commands import GroupMixin, Command
 from imgurpython import ImgurClient
 from redis import ResponseError
 from typing import Union, List, Optional, Dict
@@ -239,6 +240,8 @@ class ImageListCommands:
         self.list_objs = []
         self._cache_updating = False
 
+        self._external_commands = []  # Commands which are not hardcoded but generated from redis
+
         self.config = self.bot.config
         # self.raw_album_dict = config.scan(match="img:albums")[1]  # This one's updated with manual commands.
         for set_name in config.scan_iter(match="img:albums:*"):  # scan over all of the image lists
@@ -254,10 +257,47 @@ class ImageListCommands:
                 log.info("Album {} was not in cache, adding.".format(command_name))
                 # new_image_list.save_to_cache()  # They all get cached later anyway
 
+            # If a command is already defined as a function in the class, we'll ignore it here
+            if not hasattr(self, command_name):
+                self.create_new_command(command_name)
+
             self.list_objs.append(new_image_list)
 
         log.info("Image lists initialized.")
         self.bot.loop.create_task(self.update_cache())
+
+    async def new_command_func(self, ctx):
+        await self.process_command(ctx)
+
+    def create_new_command(self, name: str):
+        new_cmd = commands.command(name=name, pass_context=True)(self.new_command_func)
+        new_cmd.help_category = self.__class__.__name__
+        # new_cmd.cog_name
+        self._external_commands.append(new_cmd)
+        self.bot.add_command(new_cmd)
+
+    def update_commands(self):
+
+        # @commands.command()
+
+        # new_cmd = commands.command(name="test")(self.new_command_func)
+
+        for cmd in self._external_commands:
+            cmd.cog_name = self.__class__.__name__
+
+        print("a")
+
+        # self.bot.add_command(new_cmd)
+
+    def update_external_commands(self, cog):
+        """
+        Update the external commands so they reflect the current cog.
+        This should be called after the cog is generated.
+        """
+        # for cmd in self._external_commands:
+        #     cmd.cog_name = self.__class__.__name__
+
+        print("a")
 
     def retro_load_albums_to_redis(self) -> None:
         n = self.config.get("album_lists")
@@ -269,8 +309,6 @@ class ImageListCommands:
         Automatically handle a basic image list. Take context as a kwarg so we can use it as a Command
         This may or may not work
         """
-        if not isinstance(ctx.message.channel, discord.DMChannel) and ctx.guild.id == 111504456838819840:
-            return
         if rate_limits.MemeCommand.check_rate_limit(ctx,
                                                     cooldown_group="image_list",
                                                     priority_blacklist=[319309336029560834]):  # #mature_chat
@@ -296,6 +334,10 @@ class ImageListCommands:
         if url is None:
             if ctx.message.attachments:
                 url = ctx.message.attachments[0]
+                if url.endswith(":large"):
+                    url = url[:-6]
+                elif url.endswith("large"):  # Twitter images suck
+                    url = url[:-5]
             else:
                 raise commands.MissingRequiredArgument("url")
         elif url == "^":
@@ -345,13 +387,14 @@ class ImageListCommands:
         config.sadd("img:albums:{}:ids".format(list_name), list_id)
         if not command_exists:
             self.list_objs.append(ImageList(list_name, [list_id]))
+            self.create_new_command(list_name)
         else:
             obj = discord.utils.get(self.list_objs, name=list_name)
             if obj is None:
                 obj = ImageList(list_name, [list_id])
             else:
                 obj.images.append(list_id)
-            await obj.to_cache()
+            obj.save_to_cache()
 
         await ctx.send("Image list added to datafile successfully.")
         if not command_exists:
@@ -379,7 +422,7 @@ class ImageListCommands:
     @checks.not_in_oaks_lab()
     @commands.command()
     async def nonya(self, ctx: Context) -> None:
-        if ctx.guild.id == 111504456838819840:
+        if not isinstance(ctx.channel, discord.DMChannel) and ctx.guild.id == 111504456838819840:
             return
         if rate_limits.MemeCommand.check_rate_limit(ctx,
                                                     cooldown_group="image_list",
@@ -401,156 +444,12 @@ class ImageListCommands:
                 obj = discord.utils.get(self.list_objs, name="nonya")
                 await ctx.send(obj.get_image())
 
-    @commands.command()
-    async def fug(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def purplewurmple(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def loss(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def star(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def ddom(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
     @commands.command(aliases=["shep"])
     async def loreal(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
-    @commands.command()
-    async def salesmenace(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def dusk(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def pew(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def sylv(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def bait(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def sabl(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def lux(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def shinx(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def kek(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def umbr(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def bulba(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def typh(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def noi(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def luc(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def absol(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def zig(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
     @commands.command(aliases=["myau"])
     async def espurr(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def rowl(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def glace(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def latias(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def arcanine(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def kip(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def luran(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def lap(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def pidge(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def kyu(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def deli(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def glace(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def flare(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def flyg(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def geng(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def zard(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command()
@@ -561,81 +460,13 @@ class ImageListCommands:
             await self.process_command(ctx)
 
     @commands.command()
-    async def aegi(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def honk(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def kern(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def cino(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def drei(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def ruff(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def karp(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def faceswap(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def baned(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def dewott(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
     async def backstory(self, ctx: Context) -> None:
         if not isinstance(ctx.message.channel, discord.DMChannel) and ctx.message.guild.id in [283101596806676481,
                                                                                                239125949122215952]:
             await self.process_command(ctx)
 
-    @commands.command()
-    async def toto(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def quag(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def squirt(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
     @commands.command(aliases=["wish"])
     async def jirachi(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def pawn(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def mew(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def delet(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def vap(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
     @commands.command(hidden=True)
@@ -644,65 +475,9 @@ class ImageListCommands:
             await self.process_command(ctx)
 
     @commands.command()
-    async def saws(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def noodle(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def riolu(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def vee(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
     async def espy(self, ctx: Context) -> None:
         if not isinstance(ctx.message.channel, discord.DMChannel) and ctx.message.guild.id in [283101596806676481]:
             await self.process_command(ctx)
-
-    @commands.command()
-    async def drag(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def chu(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def goo(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command(hidden=True)
-    async def kekx(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def pory(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def trash(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def forget(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def furr(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def nine(self, ctx: Context) -> None:
-        await self.process_command(ctx)
-
-    @commands.command()
-    async def whim(self, ctx: Context) -> None:
-        await self.process_command(ctx)
 
     @checks.in_cj()
     @commands.command()
@@ -745,4 +520,6 @@ class ImageListCommands:
 
 
 def setup(bot: Bot):
-    bot.add_cog(ImageListCommands(bot))
+    cog = ImageListCommands(bot)
+    # cog.update_commands()
+    bot.add_cog(cog)

@@ -1,33 +1,45 @@
-from discord.ext import commands
+
+from typing import Callable
+
 import discord.utils
-from discord import DMChannel
+
+from discord.ext import commands
+from discord import DMChannel, Guild, Message, Role
+from discord.ext.commands import Context, Command
+
+
+T_Check = Callable[[Callable[[Context], bool]], Command]
+
 
 # More code from robodanny
 
 
 # The original function
-def sudo_check(message):
-    return message.author.id == 78716152653553664 or message.author.id == 125435062127820800
+def sudo_check(message: Message) -> bool:
+    return message.author.id == 78716152653553664 or \
+           message.author.id == 125435062127820800
 
 
 # And the function that works as a decorator
-def sudo():
-    return commands.check(lambda ctx: sudo_check(ctx.message))
+def sudo() -> T_Check:
+    return commands.check(
+        lambda ctx: sudo_check(ctx.message)
+    )
 
 
-def r_pokemon_check(server):
+def r_pokemon_check(server: Guild) -> bool:
     return server.id == 111504456838819840
 
 
-def r_md_check(server):
+def r_md_check(server: Guild) -> bool:
     return server.id == 117485575237402630
 
 
-def pm_check(channel):
+def pm_check(channel: Guild) -> bool:
     return isinstance(channel, discord.DMChannel)
 
 
-def has_role(ctx, check):
+def has_role(ctx: Context, check: Callable[[Role], bool]) -> bool:
     """
     Check if someone has a role,
     :param ctx:
@@ -48,59 +60,75 @@ def has_role(ctx, check):
     return role is not None
 
 
-def is_pokemon_mod():
-    def predicate(ctx):
-        return has_role(ctx, lambda r: r.id == 278331223775117313) or (not pm_check(ctx.message.channel) and
-                                                                       ctx.message.guild.id == 146626123990564864)
+def is_pokemon_mod() -> T_Check:
+    def predicate(ctx: Context) -> bool:
+        return has_role(ctx,
+                        lambda r: r.id == 278331223775117313
+                        ) or (
+                        not pm_check(ctx.message.channel)
+                        and ctx.message.guild.id == 146626123990564864
+                        )
     return commands.check(predicate)
 
 
-def is_leader():
-    def predicate(ctx):
+def is_leader() -> T_Check:
+    def predicate(ctx: Context) -> bool:
         return has_role(ctx, lambda r: r.id == 325763695533883392)
     return commands.check(predicate)
 
 
-def in_pm():
-    def predicate(ctx):
+def in_pm() -> T_Check:
+    def predicate(ctx: Context) -> bool:
         return isinstance(ctx.message.channel, DMChannel)
     return commands.check(predicate)
 
 
-def not_in_oaks_lab():
-    def predicate(ctx):
-        return isinstance(ctx.message.channel, discord.DMChannel) or (ctx.message.guild is not None
-                                                                      and ctx.message.guild.id != 204402667265589258)
+def not_in_oaks_lab() -> T_Check:
+    def predicate(ctx: Context) -> bool:
+        return isinstance(
+            ctx.message.channel, discord.DMChannel
+        ) or (
+                ctx.message.guild is not None
+                and ctx.message.guild.id != 204402667265589258
+        )
     return commands.check(predicate)
 
 
-def not_in_pokemon():
-    def predicate(ctx):
-        return isinstance(ctx.message.channel, discord.DMChannel) or (ctx.message.guild is not None
-                                                                      and ctx.message.guild.id != 111504456838819840)
+def not_in_pokemon() -> T_Check:
+    def predicate(ctx: Context) -> bool:
+        return isinstance(
+            ctx.message.channel, discord.DMChannel
+        ) or (
+                ctx.message.guild is not None
+                and ctx.message.guild.id != 111504456838819840
+        )
     return commands.check(predicate)
 
 
-def mod_server_check(guild):
+def mod_server_check(guild: Guild) -> bool:
     return guild.id == 146626123990564864
 
 
-def mod_server():
-    def predicate(ctx):
+def mod_server() -> T_Check:
+    def predicate(ctx: Context) -> bool:
         return mod_server_check(ctx.message.guild) or sudo_check(ctx.message)
     return commands.check(predicate)
 
 
-def is_regular():
+def is_regular() -> T_Check:
     # Hope you've been eating your fiber
-    def predicate(ctx):
-        return isinstance(ctx.message.channel, discord.DMChannel) or not r_pokemon_check(ctx.message.guild) or \
-               (r_pokemon_check(ctx.message.guild) and has_role(ctx, lambda r: r.id == 117242433091141636))
+    def predicate(ctx: Context) -> bool:
+        return isinstance(
+            ctx.message.channel, discord.DMChannel
+        ) or not r_pokemon_check(ctx.message.guild) or (
+                r_pokemon_check(ctx.message.guild)
+                and has_role(ctx, lambda r: r.id == 117242433091141636)
+        )
     return commands.check(predicate)
 
 
-def can_tag():
-    def predicate(ctx):
+def can_tag() -> T_Check:
+    def predicate(ctx: Context) -> bool:
         message = ctx.message
         if sudo_check(message):
             return True
@@ -111,34 +139,38 @@ def can_tag():
     return commands.check(predicate)
 
 
-def r_pokemon():
+def r_pokemon() -> T_Check:
     """Check if it's the /r/pokemon server"""
-    def predicate(ctx):
+    def predicate(ctx: Context) -> bool:
         return ctx.message.guild is not None and ctx.message.guild.id == 111504456838819840
     return commands.check(predicate)
 
 
-def r_md():
-    def predicate(ctx):
-        return ctx.message.guild is not None and ctx.message.guild.id == 117485575237402630
+def r_md() -> T_Check:
+    def predicate(ctx: Context) -> bool:
+        return ctx.message.guild is not None and ctx.message.guild.id == 117485575237402630 or sudo_check(ctx.message)
     return commands.check(predicate)
 
 
-def not_pmdnd():
-    def predicate(ctx):
+def not_pmdnd() -> T_Check:
+    def predicate(ctx: Context) -> bool:
         return ctx.message.guild is not None and ctx.message.guild.id != 239125949122215952
     return commands.check(predicate)
 
 
-def not_rmd():
-    def predicate(ctx):
+def not_rmd() -> T_Check:
+    def predicate(ctx: Context) -> bool:
         return ctx.message.guild is not None and ctx.message.guild.id != 117485575237402630
     return commands.check(predicate)
 
 
-def explicit_whitelist():
-    """Whitelist for explicit commands"""
+def leader_for_a_year() -> T_Check:
+    def predicate(ctx) -> bool:
+        return has_role(ctx, lambda r: r.id == 417055258716405761)
+    return commands.check(predicate)
+
+
+def in_cj() -> T_Check:
     def predicate(ctx):
-        return ctx.message.channel.id in [262993960035680256, 274063615307546625, 274734349981712385,
-                                          157365909864972288, 290715803882487809]
+        return ctx.message.guild is not None and ctx.message.guild.id == 283101596806676481
     return commands.check(predicate)

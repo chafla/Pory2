@@ -1,5 +1,7 @@
 """A pokemon tourney for the mods, woo hoo"""
 import logging
+from typing import Dict
+
 import discord
 from discord.ext import commands
 from discord.ext.commands import Context
@@ -122,7 +124,7 @@ class PokemonTourney:
         return ["config:pkmn_tourney:leaders:{}".format(i) for i in self._leader_ids]
 
     @property
-    def badges(self):
+    def badges(self) -> Dict[int, str]:
         """
 
         :return: {user_id: badge_name} for each badge
@@ -296,7 +298,7 @@ class PokemonTourney:
 
         for user_id in self.badges:
             mem = self.pokemon_guild.get_member(user_id)
-            if not self._is_inactive(mem.id) and mem is not None:
+            if mem is not None and not self._is_inactive(mem.id):
                 if discord.utils.get(mem.roles, name="In The Gym"):
                     output["in_the_gym"].append("{} {}".format(str(self.green_dot_emoji), mem.display_name))
                 elif mem.status not in [discord.Status.offline, discord.Status.invisible] and include_online_members:
@@ -336,7 +338,7 @@ class PokemonTourney:
                     self._get_emoji_from_name(ribbons["Elite League Champion"]))
             else:
                 champion_msg = ""
-            self.config.sadd("user:pkmn_tourney:ribbons:{}".format(target.id), ribbons["Elite League Champion"])
+            self.config.sadd("user:{}:pkmn_tourney:ribbons".format(target.id), ribbons["Elite League Champion"])
 
         else:
             champion_msg = ""
@@ -352,11 +354,20 @@ class PokemonTourney:
     async def badge_info(self, ctx, badge_name: str):
         """Retreives info about a particular badge"""
         for mem_id, badge in self.badges.items():
+            not_in_server = False
             short_name = badge[:-5]
             if badge_name == short_name or badge_name == badge:
-                desc = "{} Badge{}".format(short_name, "\n*(Inactive)*" if self._is_inactive(mem_id) else "")
-                embed = discord.Embed(description=desc)
                 mem = self.pokemon_guild.get_member(mem_id)
+                if not mem:
+                    # user has left the server
+                    mem = self.bot.get_user(mem_id)
+                    not_in_server = True
+
+                desc = "{} Badge{}".format(short_name,
+                                           "\n*(Inactive)*" if self._is_inactive(mem_id) or not_in_server else "")
+
+                embed = discord.Embed(description=desc)
+
                 embed.set_author(name="{}'s badge.".format(mem.name, short_name),
                                  icon_url=mem.avatar_url)
                 embed.set_thumbnail(url=self._get_emoji_from_name(badge).url)
@@ -439,7 +450,16 @@ class PokemonTourney:
                 continue
             elif badge not in badge_collection:
                 badge += "Unattained"
-            embed.add_field(name=self.pokemon_guild.get_member(mod_id).name,
+
+            # we only care about the username here: grab it from the general bot context if we can
+            # if that doesn't work, then we'll just display something generic
+            mod_user = self.bot.get_user(mod_id)
+            if mod_user is None:
+                mod_name = "<Someone long gone>"
+            else:
+                mod_name = mod_user.name
+
+            embed.add_field(name=mod_name,
                             value=str(self._get_emoji_from_name(badge)))
 
         # Clean up in case they have a badge that isn't reflected in the active mod badges

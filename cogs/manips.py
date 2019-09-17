@@ -6,9 +6,9 @@ import os.path
 from glob import glob
 from io import BytesIO
 from os import remove
-from random import randint, random
+from random import randint, random, randrange
 from typing import Union, Tuple
-# from uuid import uuid4
+from uuid import uuid4
 
 import aiohttp
 import cv2
@@ -16,6 +16,7 @@ import discord
 import numpy as np
 import PIL
 import PIL.Image
+from wand.image import Image
 
 from discord import Member
 from discord.ext import commands
@@ -39,6 +40,49 @@ class Manips:
         self._channel_cooldowns = []
         self.config = bot.config
         self._parameter_cache = self.config.hgetall("config:manips:params")
+
+    @staticmethod
+    async def test_barrel_distort(base_img_path, distort_args: Tuple = None,
+                                  ctx=None):
+
+        base_img = Image(filename=base_img_path)
+        base_img = Manips.magic_rescale(base_img)
+
+        # w, h = base_img.size
+
+        # Changing these values
+        # Increasing the value of the first two squeezes the image horizontally
+        # Increasing the second two stretches the image so harshly it pulls in outer pixels
+        # increasing the third causes intense vertical distortions on the outer edges of the picture
+        # Increasing the fourth causes the image to become vertically pinched
+        # Zeroing the fourth causes the image to become gigastretched
+
+        # these arguments are perfect for the blown-up sort of look
+
+        if distort_args is None:
+            arguments = (0.4, 0.4,
+                         0, 0,
+                         0.5, 0,
+                         0.2, 0.2)
+        else:
+            arguments = distort_args
+
+        # cursed_stretch_arguments = (0, 0,
+        #                             0, 1,
+        #                             0, 0,
+        #                             -0.7, 1.3)
+
+        # arguments = perfect_expansion_arguments
+
+        if ctx is not None:
+            await ctx.send(str(arguments))
+
+        base_img.distort("barrel", arguments)
+
+        img_buffer = np.asarray(bytearray(base_img.make_blob()), dtype=np.uint8)
+        retval = cv2.imdecode(img_buffer, cv2.IMREAD_UNCHANGED)
+        cv2.imwrite(base_img_path, retval)
+        return base_img_path
 
     @staticmethod
     def overlay_sunglasses(base_img_path: Union[str, BytesIO]) -> Union[str, BytesIO]:
@@ -187,6 +231,67 @@ class Manips:
         new_img.save(output, format="PNG")
         new_img.seek(0)
         return output
+
+    @staticmethod
+    def upscale_image(cv2_img: np.ndarray):
+        w, h = cv2_img.shape[:2]
+        min_scale = 300
+
+        max_scale = 1500
+        if h < min_scale:
+            h_upscale_ratio = min_scale / h
+        else:
+            h_upscale_ratio = 1
+
+        if w < min_scale:
+            w_upscale_ratio = min_scale / w
+        else:
+            w_upscale_ratio = 1
+
+        # Also check to see if the image is too large and we need to scale it down
+
+        if h > max_scale:
+            h_upscale_ratio = max_scale / h
+
+        if w > max_scale:
+            w_upscale_ratio = max_scale / w
+
+        scaling_ratio = min(h_upscale_ratio, w_upscale_ratio)
+
+        if scaling_ratio != 1:
+            cv2_img = cv2.resize(cv2_img, (0, 0), fx=scaling_ratio, fy=scaling_ratio)
+        return cv2_img
+
+    @staticmethod
+    def magic_rescale(magic_image: Image):
+        w, h = magic_image.size[:2]
+        min_scale = 400
+
+        max_scale = 1500
+        if h < min_scale:
+            h_upscale_ratio = min_scale / h
+        else:
+            h_upscale_ratio = 1
+
+        if w < min_scale:
+            w_upscale_ratio = min_scale / w
+        else:
+            w_upscale_ratio = 1
+
+        # Also check to see if the image is too large and we need to scale it down
+
+        if h > max_scale:
+            h_upscale_ratio = max_scale / h
+
+        if w > max_scale:
+            w_upscale_ratio = max_scale / w
+
+        scaling_ratio = min(h_upscale_ratio, w_upscale_ratio)
+
+        if scaling_ratio != 1:
+            magic_image.resize(int(w * w_upscale_ratio), int(h * h_upscale_ratio))
+            # cv2_img = cv2.resize(cv2_img, (0, 0), fx=scaling_ratio, fy=scaling_ratio)
+        return magic_image
 
     @staticmethod
     def disintegrate(base_image_fp: Union[str, BytesIO]) -> str:
@@ -520,6 +625,63 @@ class Manips:
             await ctx.send("File-type must be a png.")
         else:
             await ctx.send("Successfully added new template.")
+
+    @commands.command(aliases=["barrel"])
+    async def zoom(self, ctx: Context, *, image_url: str=None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="heavymanips",
+            priority_blacklist=self.blacklisted_channels
+        )
+
+        fp = "barrel-{}.png".format(uuid4())
+
+        async with ctx.typing():
+            image_url = await self._get_image_url(ctx, image_url)
+            await self.download_image_to_file(image_url, fp)
+
+            await self.test_barrel_distort(fp)
+        await ctx.send(file=discord.File(fp))
+        remove(fp)
+
+    @commands.command()
+    async def bup(self, ctx: Context, *, image_url: str = None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="heavymanips",
+            priority_blacklist=self.blacklisted_channels
+        )
+
+        async with ctx.typing():
+            image_url = await self._get_image_url(ctx, image_url)
+            fp = "ohno-{}.png".format(uuid4())
+            await self.download_image_to_file(image_url, fp)
+
+            await self.test_barrel_distort(fp,
+                                           (0, 0,
+                                            0, 1,
+                                            0, 0,
+                                            -0.7, 1.3))
+        await ctx.send(file=discord.File(fp))
+        remove(fp)
+
+    @commands.command(aliases=["ohno"])
+    async def destroy(self, ctx: Context, *, image_url: str = None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(
+            ctx, cooldown_group="heavymanips",
+            priority_blacklist=self.blacklisted_channels
+        )
+
+        async with ctx.typing():
+            image_url = await self._get_image_url(ctx, image_url)
+
+            fp = "ohgod-{}.png".format(uuid4())
+            await self.download_image_to_file(image_url, fp)
+
+            test_tuple = [random() * 3 - 1.5 for _ in range(6)]
+
+            await self.test_barrel_distort(fp,
+                                           test_tuple)
+        await ctx.send(file=discord.File(fp))
+        remove(fp)
 
     @commands.command()
     async def angery(self, ctx: Context, *, image_url: str=None) -> None:

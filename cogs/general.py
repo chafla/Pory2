@@ -27,14 +27,47 @@ class Rollable:
     """Small type to allow for a few different inputs"""
 
     def __init__(self, argument: str) -> None:
-        cleaned_arg = argument.strip("d")  # e.g. d4
-        try:
-            self.value = int(cleaned_arg)
-        except ValueError:
-            if cleaned_arg.lower() == "rick":
-                raise commands.BadArgument("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        self.n_dice = 1
+        if argument == "rick":
+            raise commands.BadArgument("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        cleaned_arg = argument.lstrip("d")  # remove a leading d
+
+        if " " not in cleaned_arg:  # new-style command
+            arg_split = [i.strip("d") for i in cleaned_arg.split("d")]
+
+            if len(arg_split) == 2:  # It's split into ("4", "4") and not ("", "4")
+                try:
+                    self.n_dice = int(arg_split[0])
+                except ValueError:
+                    raise commands.BadArgument("Could not convert number of dice to an integer")
+
+                try:
+                    self.value = int(arg_split[1])
+                except ValueError:
+                    raise commands.BadArgument("Could not convert dice sides into an integer")
+            elif len(arg_split) == 1:
+                try:
+                    self.value = int(arg_split[0])
+                except ValueError:
+                    raise commands.BadArgument("Could not convert dice sides to integer")
             else:
-                raise commands.BadArgument("Could not convert parameter `sides` to type 'int'.")
+                raise commands.BadArgument("Too many arguments were specified")
+
+        else:
+
+            arg_split = [i.strip("d") for i in cleaned_arg.split(" ")]
+
+            if len(arg_split) == 1:
+                try:
+                    self.value = int(arg_split[0])
+                except ValueError:
+                    raise commands.BadArgument("Could not convert dice sides to integer")
+            else:
+                try:
+                    self.value = int(arg_split[0])
+                    self.n_dice = int(arg_split[1])
+                except ValueError:
+                    raise commands.BadArgument("Could not convert parameter `sides` to type 'int'.")
 
     def __int__(self) -> int:
         return self.value
@@ -198,10 +231,13 @@ class General:
     @checks.not_rmd()
     @checks.not_pmdnd()
     @commands.command(aliases=["rolld"])
-    async def roll(self, ctx: Context, sides: Rollable, rolls: int=1) -> None:
-        """Roll a die, or a few."""
+    async def roll(self, ctx: Context, *, roll: Rollable) -> None:
+        """Roll a die, or a few.
 
-        sides = sides.value
+        Can be formatted as '!roll <sides>', '!roll <sides> <rolls>', or '!roll <rolls>d<sides>."""
+
+        rolls = roll.n_dice
+        sides = roll.value
 
         if rolls == 1:  # Just !roll 3
             num = random.randint(1, abs(sides))

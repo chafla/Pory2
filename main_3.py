@@ -13,19 +13,29 @@ Rewriting to account for the new breaking changes in discord.py that's coming up
 'I'm gonna go pour some holy water in my .gitignore' -Porygon2
 """
 
-import json
-import logging
-import sys
-from discord.ext import commands
 import asyncio
+import logging
+import json
+import sys
+import traceback
+
+from io import StringIO
+from time import perf_counter
+
+from discord import Message
+from discord.ext.commands import (
+    Context, CommandError, NoPrivateMessage, DisabledCommand,
+    CheckFailure, CommandNotFound, MissingRequiredArgument,
+    CommandInvokeError, UserInputError, BadArgument, AutoShardedBot
+)
+
 from cogs.utils.errors import CommandBlacklisted, CommandRateLimited
 from cogs.utils.checks import sudo_check
 from cogs.utils.redis_config import RedisConfig
-import traceback
-from time import perf_counter
-from io import StringIO
+
 
 loop = asyncio.get_event_loop()
+
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -34,10 +44,11 @@ formatter = logging.Formatter("{asctime} - {levelname} - {message}", style="{")
 handler.setFormatter(formatter)
 log.addHandler(handler)
 
+
 log.info("Instance started.")
 
 
-def exception_handler(loop, context):
+def exception_handler(loop, context) -> None:
     """Log all exceptions to our logger while also sending them to stderr"""
     log.error(context["message"],
               exc_info=context["exception"])
@@ -56,7 +67,6 @@ initial_extensions = [
     'cogs.logs',
     'cogs.markov',
     'cogs.micspam',
-    'cogs.rpokemon',
     'cogs.server_logs',
     'cogs.rmd',
     'cogs.quackbot',
@@ -73,8 +83,8 @@ initial_extensions = [
     'cogs.github',
 ]
 
-description = "Memebot written initially for the /r/MysteryDungeon server that now resides in /r/Pokemon's " \
-              "discord server. Written by Luc#5653"
+description = "Memebot written initially for the /r/MysteryDungeon server that has spread elsewhere." \
+              "\nWritten by Luc#5653."
 
 try:
     with open('auth.json', 'r+') as json_auth_info:
@@ -82,10 +92,37 @@ try:
 except IOError:
     sys.exit("auth.json not found in running directory.")
 
-bot = commands.Bot(command_prefix=prefix, description=description, pm_help=True)
+
+async def init_timed_events(client: AutoShardedBot) -> None:
+    """Create a listener task with a tick-rate of 1s"""
+
+    await client.wait_until_ready()  # Wait for the bot to launch first
+    client.secs = 0
+
+    secs = 0  # Keep track of the number of secs so we can access it elsewhere and adjust how often things run
+    while True:
+        client.dispatch("timer_update", secs)
+        await timer_update(secs)
+        secs += 1
+        client.secs = secs
+        await asyncio.sleep(1)
 
 
-def log_exception(error, ctx):
+class PoryBot(AutoShardedBot):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.instance = "Porygon2"
+        self.events = []
+        self.boo_counter = 1
+        self.config = RedisConfig()
+        self.loop.create_task(init_timed_events(self))
+
+
+bot = PoryBot(command_prefix=prefix, description=description, pm_help=True, fetch_offline_members=True)
+
+
+def log_exception(error: Exception, ctx: Context) -> None:
     # Print out to stderr and log
     sio = StringIO()
     if ctx.command:
@@ -101,7 +138,7 @@ def log_exception(error, ctx):
 
     # Make it write out when something goes wrong, so we have an idea what's going on w/o having to consult logs
     if sudo_check(ctx.message):
-        if isinstance(error, commands.CommandInvokeError):
+        if isinstance(error, CommandInvokeError):
             error = error.original
         exc_output = "🕷️ The last command triggered an exception:\n```py\n{0.__class__.__name__}: {0}\n{1}```".format(
             error, sio.getvalue() if len(sio.getvalue()) < 2000 else "")
@@ -109,51 +146,36 @@ def log_exception(error, ctx):
 
 
 @bot.listen()
-async def timer_update(seconds):
+async def timer_update(seconds: int) -> int:
     # Dummy listener
     return seconds
 
 
-async def init_timed_events(bot):
-    """Create a listener task with a tick-rate of 1s"""
-
-    await bot.wait_until_ready()  # Wait for the bot to launch first
-    bot.secs = 0
-
-    secs = 0  # Keep track of the number of secs so we can access it elsewhere and adjust how often things run
-    while True:
-        bot.dispatch("timer_update", secs)
-        await timer_update(secs)
-        secs += 1
-        bot.secs = secs
-        await asyncio.sleep(1)
-
-
 @bot.event
-async def on_command_error(ctx, error):
+async def on_command_error(ctx: Context, error: CommandError) -> None:
 
-    if isinstance(error, commands.NoPrivateMessage):
+    if isinstance(error, NoPrivateMessage):
         await ctx.send('This command cannot be used in private messages.')
-    elif isinstance(error, commands.DisabledCommand):
+    elif isinstance(error, DisabledCommand):
         await ctx.send('This command is disabled and cannot be used.')
-    elif isinstance(error, commands.CheckFailure):
+    elif isinstance(error, CheckFailure):
         # This caused issues with Meloetta running in the same channel
         # await bot.send_message(ctx.message.author, "You do not have permission to use this command.")
         pass
-    elif isinstance(error, commands.CommandNotFound):
+    elif isinstance(error, CommandNotFound):
         pass
-    elif isinstance(error, commands.MissingRequiredArgument):  # This inherits from UserInputError
+    elif isinstance(error, MissingRequiredArgument):  # This inherits from UserInputError
         await bot.formatter.format_help_for(ctx, ctx.command, "You are missing required arguments.")
-    elif isinstance(error, commands.CommandInvokeError):
+    elif isinstance(error, CommandInvokeError):
         log_exception(error, ctx)
-    elif isinstance(error, (CommandBlacklisted, CommandRateLimited, commands.UserInputError, commands.BadArgument)):
+    elif isinstance(error, (CommandBlacklisted, CommandRateLimited, UserInputError, BadArgument)):
         await ctx.send(error if error else error.__class__.__name__)
     else:
         log_exception(error, ctx)
 
 
 @bot.event
-async def on_ready():
+async def on_ready() -> None:
     print('Logged in as')
     print(bot.user.name)
     print(bot.user.id)
@@ -164,21 +186,19 @@ async def on_ready():
 
 
 @bot.event
-async def on_message(message):
+async def on_message(message: Message) -> None:
 
     if message.author.id == bot.user.id:
         return
+
+    if message.content.startswith("!"):
+        log.info("Command '{}' called by {} ({})".format(message.content, message.author.name, message.author.id))
 
     await bot.process_commands(message)
 
 # Starting up
 
 if __name__ == "__main__":
-    bot.instance = "Porygon2"
-    bot.events = []
-    bot.boo_counter = 1
-    bot.config = RedisConfig()
-    bot.loop.create_task(init_timed_events(bot))
     current_uptime = perf_counter()
     last_reading = 0
     log.info("Loading cogs...")

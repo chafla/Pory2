@@ -83,7 +83,7 @@ class Uwuconomy:
 
         name = "config:uwuconomy:muted"
 
-        target = ctx.message.channel if bounds != "serverwide" else ctx.message.server
+        target = ctx.message.channel if bounds not in ["serverwide", "server"] else ctx.message.guild
 
         if self.config.sismember(name, target.id):
             self.config.srem(name, target.id)
@@ -95,6 +95,28 @@ class Uwuconomy:
             self.muted_contexts.append(str(target.id))
 
         await ctx.send("uwuconomy reactions {} in {}.".format(action, target.name))
+
+    @checks.sudo()
+    @commands.command(hidden=True, enabled=False)
+    async def uwu_deflation(self, ctx: Context):
+        """Retroactively collect uwus from the called channel and add them to the uwuconomy"""
+        # oh god this is a bad idea
+
+        messages_parsed = 0
+
+        msg = await ctx.send("0 messages parsed")
+
+        async for message in ctx.message.channel.history(limit=None):
+            await self.on_message(message)
+            messages_parsed += 1
+
+            if messages_parsed % 200 == 0:
+                await msg.edit(content="{} messages parsed, last one from {}".format(
+                    messages_parsed,
+                    message.created_at
+                ))
+
+        await ctx.send("Complete")
 
     async def on_message(self, message: Message) -> None:
         if not isinstance(message.channel, DMChannel) and \

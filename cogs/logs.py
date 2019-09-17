@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import logging
 import time
+from io import BytesIO
 
 from typing import Union, List
 
@@ -13,6 +14,7 @@ from discord import (
 from discord.ext import commands
 from discord.ext.commands import Bot, Context
 
+from cogs.utils.utils import download_image
 from .utils import checks
 
 
@@ -98,11 +100,39 @@ class Logs:
                                   color=discord.Color.orange())
             server_logs = self.bot.get_cog("ServerLogs")
             embed = server_logs.format_embed(embed, message.author)
-            embed.add_field(name="Content", value=message.content)
+
+            if message.content:
+                embed.add_field(name="Content", value=message.content)
+
+            # Attempt to download an image from the message if it exists
+
+            reupload = None
+            files = []
+
+            if message.attachments:
+                embed.add_field(name="File attached above", value=message.attachments[0].url)
+                for attachment in message.attachments:
+                    temp_image = BytesIO()
+                    if attachment.size > 5000000:
+                        # caching is important and all, but this will just cause more harm than good
+                        pass
+                    else:
+                        try:
+                            await download_image(message.attachments[0].url, temp_image)
+                            reupload = discord.File(temp_image, filename="reupload.{}".format(attachment.filename))
+                            files.append(reupload)
+
+                        except Exception:
+                            log.exception("Encountered exception when downloading attachment.")
 
             try:
                 dest = self.bot.get_channel(198526174735892480)
-                await dest.send(embed=embed)
+                if len(files) == 0:
+                    await dest.send(embed=embed)
+                elif len(files) == 1:
+                    await dest.send(embed=embed, file=files[0])
+                else:
+                    await dest.send(embed=embed, files=reupload)
             except discord.HTTPException:
                 pass
 

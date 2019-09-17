@@ -6,9 +6,9 @@ intro_pm_content_pkmn = '''
 ~ For help with the bots, type `.help` or `!help` in the server.\n
 ~ If you're confused or need help with anything, feel free to ask a mod!\n
 ~ We are not looking for any new bots, and we do not allow any new user-account bots, either. Please do not bring in any new ones.\n
-~ At the moment, you won't have some privileges, such as sending files, embedding pictures, or setting a nickname. After you've been here for a while, you can apply to become a regular in <#117242749446520837> and gain these permissions.\n
-  Regular applications are processed twice per month, so stick around and stay active!\n
-~ In the event that you get banned from the server (and we certainly hope you don't), please utilize this link to submit a ban appeal form if you believe you were wrongfully banned: <https://docs.google.com/forms/d/e/1FAIpQLSdE6JWlSPlTFPJcu8mg9PO_OIxrl2HV865tQ1W2LThr2iPegg/viewform>\n
+~ At the moment, you won't have some privileges, such as sending files, embedding pictures, or setting a nickname. After you've been here for a while, you can apply to become a Licensed Trainer in <#117242749446520837> and gain these permissions.\n
+  License Applications are processed twice per month, so stick around and stay active!\n
+~ In the event that you get banned from the server (and we certainly hope you don't), please utilize this link to submit a ban appeal form if you believe you were wrongfully banned: <https://goo.gl/forms/0FobAMhqxwD8o17a2>\n
 ~ ***__Note to Pokémon GO and Pokkén players:__*** Pokkén and Pokémon GO! may be discussed, but they also have large existing Discord communities of their own.
   You can find links to the related servers in <#349198111345868801>\n
 ~ We hope you enjoy your time here!\n
@@ -16,7 +16,7 @@ intro_pm_content_pkmn = '''
 
 ~ **THIS SERVER USES VARIOUS BOTS, SOME OF WHICH STORE YOUR DATA (MESSAGES, USER ID'S, ETC.).**
   **IN ORDER TO COMPLY WITH DISCORD'S DEVELOPER TERMS OF SERVICE ( https://discordapp.com/developers/docs/legal) WE REQUIRE ALL USERS TO EXPRESSLY AGREE TO THESE TERMS.**
-  **AS SUCH BEFORE YOU CAN USE THIS SERVER WE REQUIRE YOU TO TYPE THE FOLLOWING, `I agree to the terms and conditions` IN <#349198111345868801>.**
+  **AS SUCH BEFORE YOU CAN USE THIS SERVER WE REQUIRE YOU TO TYPE THE FOLLOWING, `I agree` IN <#349198111345868801>.**
 {0}\n
 `[I am a bot, and this message was sent automatically.]`
 '''.format(game_night_content)

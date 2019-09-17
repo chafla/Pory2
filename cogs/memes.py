@@ -9,7 +9,6 @@ from io import BytesIO
 from random import choice
 
 import aiohttp
-import imghdr
 
 from discord import File
 from discord.ext import commands
@@ -37,29 +36,28 @@ class RateLimitedMemes:
         if MemeCommand.check_rate_limit(ctx, 60, ignore_blacklist=True):
             await ctx.send("Hello was received!")
 
+    # I swear
+    @commands.command(hidden=True)
+    async def hewwo(self, ctx: Context):
+        await ctx.send("h-hewwo?")
+
     @commands.command()
     async def quill(self, ctx: Context) -> None:
         if MemeCommand.check_rate_limit(ctx):
             await ctx.send("Can we discuss bodies on the chubby side? http://i.imgur.com/iP6Fiwc.png")
 
-    @checks.not_in_oaks_lab()
-    @commands.command(hidden=True, enabled=False)
-    async def gluedcario(self, ctx: Context) -> None:
-        # Currently broken
-        if MemeCommand.check_rate_limit(ctx):
-            await ctx.send("[IMAGE MISSING]")
+    # @checks.not_in_oaks_lab()
+    # @commands.command(hidden=True, enabled=False)
+    # async def gluedcario(self, ctx: Context) -> None:
+    #     # Currently broken
+    #     if MemeCommand.check_rate_limit(ctx):
+    #         await ctx.send("[IMAGE MISSING]")
 
     @checks.not_in_oaks_lab()
     @commands.command()
     async def okno(self, ctx: Context) -> None:
         if MemeCommand.check_rate_limit(ctx):
             await ctx.send("http://i.imgur.com/BnSmd7u.gif")
-
-    @checks.not_in_oaks_lab()
-    @commands.command()
-    async def lewdcario(self, ctx: Context) -> None:
-        if MemeCommand.check_rate_limit(ctx) and ctx.message.guild.id not in [111504456838819840, 117485575237402630]:
-            await ctx.send("http://i.imgur.com/tD6fDxT.png")
 
     @checks.not_in_oaks_lab()
     @commands.command()
@@ -160,17 +158,24 @@ class RateLimitedMemes:
         temp_image = BytesIO()
         async with ctx.typing():
             async with aiohttp.ClientSession() as session:
-                async with session.get('http://dcfi.co/snek/') as resp:
-                    while True:
-                        chunk = await resp.content.read(10)
-                        if not chunk:
-                            break
-                        temp_image.write(chunk)
+                # For some reason, using the full URL doesn't work right
+                # We need to omit the trailing slash
+                async with session.get('http://dcfi.co/snek') as resp:
+                    if resp.status == 200 and "image" in resp.content_type:
+                        # print(await resp.json())
+                        image_type = resp.content_type[6:]  # remove "image/
+                        while True:
+                            chunk = await resp.content.read(10)
+                            if not chunk:
+                                break
+                            temp_image.write(chunk)
+                    else:
+                        await ctx.send("This command is temporarily unavailable.")
+                        return
 
             temp_image.seek(0)
 
-            filetype = imghdr.what(temp_image)
-            filename = "snek." + filetype if filetype is not None else "jpg"
+            filename = "snek." + image_type if image_type else "jpg"
         await ctx.send(file=File(temp_image, filename))
 
     @checks.not_in_oaks_lab()
