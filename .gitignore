@@ -93,3 +93,5 @@ cogs/lounge.py
 cogs/eyes.py
 cogs/rpokemon.py
 lood*
+!auth.json
+!redis_config.json
