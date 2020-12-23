@@ -16,31 +16,31 @@ import asyncio
 import logging
 import json
 import random
+import re
 import sys
 import time
 import webbrowser
+
+import requests
 
 import discord
 
 from discord.ext import commands
 from discord.ext.commands import Bot, Context
-from discord.ext.commands import GroupMixin, Command
 from imgurpython import ImgurClient
+from imgurpython.client import ImgurClientError
 from redis import ResponseError
-from typing import Union, List, Optional, Dict
+from typing import Union, List, Optional, Dict, Set
 
 from .utils import checks, rate_limits, redis_config
 from .utils.utils import check_urls
 
-
 log = logging.getLogger()
-
 
 config = redis_config.RedisConfig()
 
 
-class ImgurAuth:
-
+class ImgurAuth(commands.Cog):
     FORCE_AUTH = True
 
     def __init__(self) -> None:
@@ -74,16 +74,16 @@ class ImgurAuth:
 
     def imgur_auth_from_cache(self) -> Optional[ImgurClient]:
         # Try to authenticate with saved credentials present in auth.json.
-            try:
-                imgur_client = ImgurClient(**self.auth["imgur"])
-                imgur_client.get_account("namen")
-                return imgur_client
-            except Exception as e:
-                log.exception("Could not authenticate for some reason. Fetching new access/refresh tokens.",
-                              exc_info=True)
-                # log.info("Could not authenticate for some reason. Fetching new access/refresh tokens.")
-                log.info("Error returned:({0.__class__.__name__}: {0}".format(e), file=sys.stderr)
-                return None
+        try:
+            imgur_client = ImgurClient(**self.auth["imgur"])
+            imgur_client.get_account("namen")
+            return imgur_client
+        except Exception as e:
+            log.exception("Could not authenticate for some reason. Fetching new access/refresh tokens.",
+                          exc_info=True)
+            # log.info("Could not authenticate for some reason. Fetching new access/refresh tokens.")
+            log.info("Error returned:({0.__class__.__name__}: {0}".format(e), file=sys.stderr)
+            return None
 
     def attempt_imgur_auth(self) -> ImgurClient:
         try_auth = self.imgur_auth_from_cache()
@@ -96,14 +96,13 @@ class ImgurAuth:
 
 
 class ImageList:
-
     _auth = ImgurAuth()
     imgur_client = _auth.attempt_imgur_auth()
     bot = None
 
     def __init__(
             self, name: str, album_ids: List[str],
-            image_list: Optional[List[str]]=None, added_msg: Optional[str]=None
+            image_list: Optional[List[str]] = None, added_msg: Optional[str] = None
     ) -> None:
         """
         Handles image lists, for meme commands such as fug and nonya. Allows for images to be added to albums and then
@@ -117,6 +116,8 @@ class ImageList:
         self.images = []  # List of URLs from the related imgur albums.
 
         self.images = self.load_from_imgur(*album_ids) if not image_list else image_list
+
+        self._blacklisted_images = set()
 
         self.msg_on_add = added_msg
 
@@ -149,7 +150,7 @@ class ImageList:
         return image_urls
 
     # Best guess at `blacklist` type. Param never used.
-    def get_image(self, blacklist: Optional[List[str]]=None):
+    def get_image(self, blacklist: Optional[List[str]] = None):
         # Allow for blacklisting to occur since deleting is a pita
         if blacklist is not None:
             while True:
@@ -163,8 +164,8 @@ class ImageList:
             self,
             ctx: Context,
             url: str,
-            user_whitelist: List[int]=None,
-            target_album_id: str=None
+            user_whitelist: List[int] = None,
+            target_album_id: str = None
     ) -> None:  # Needs to pass in global client
         """
         Add an image to an imgur album.
@@ -232,7 +233,8 @@ class ImageList:
         return cls(image_list_name, album_ids, image_list=image_list)
 
 
-class ImageListCommands:
+class ImageListCommands(commands.Cog):
+    REVERSE_SEARCH_PFX = "https://www.google.com/searchbyimage?image_url={}"
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -265,6 +267,9 @@ class ImageListCommands:
 
         log.info("Image lists initialized.")
         self.bot.loop.create_task(self.update_cache())
+
+    def get_blacklist(self, cmd_name) -> Set[str]:
+        return self.config.smembers("img:{}:blacklist".format(cmd_name))
 
     async def new_command_func(self, ctx):
         await self.process_command(ctx)
@@ -304,6 +309,34 @@ class ImageListCommands:
         for name, album_ids in n.items():
             config.sadd("img:albums:{}:ids".format(name), *album_ids)
 
+    def _get_source_embed(self, image_link: str) -> discord.Embed:
+        original_source = False
+        source_link = self.REVERSE_SEARCH_PFX.format(requests.utils.quote(image_link))
+        try:
+            imgur_img = ImageList.imgur_client.get_image(image_link.split("/")[-1].split(".")[0])
+
+            if imgur_img and imgur_img.description is not None:
+                # For this to work, image desc should only be a url with the dot surrounded by spaces
+                source_link = imgur_img.description.replace(" . ", ".")
+                original_source = True
+
+        except ImgurClientError:
+            # Just fall through and make the source link run through tineye
+            log.exception("Couldn't find imgur image")
+            pass
+
+        if not original_source:
+            footer_msg = "[Source (Google Reverse Search)]({})"
+        else:
+            footer_msg = "[Original Source]({})"
+
+        embed = discord.Embed(description=footer_msg.format(source_link))
+        embed.set_image(url=image_link)
+
+        # embed.set_footer(text=footer_msg.format(source_link))
+
+        return embed
+
     async def process_command(self, ctx: Context) -> None:
         """
         Automatically handle a basic image list. Take context as a kwarg so we can use it as a Command
@@ -317,11 +350,12 @@ class ImageListCommands:
                 await ctx.send("https://i.imgur.com/AYoDloF.jpg")  # LUL
             else:
                 obj = discord.utils.get(self.list_objs, name=ctx.command.name)
-                await ctx.send(obj.get_image())
+                blacklist = self.get_blacklist(ctx.command.name)
+                await ctx.send(embed=self._get_source_embed(obj.get_image(blacklist)))
 
     async def add(
             self, name: str, ctx: Context, url: str,
-            whitelist: List[int]=None, target_album_id: str=None
+            whitelist: List[int] = None, target_album_id: str = None
     ) -> None:
         obj = discord.utils.get(self.list_objs, name=name)
 
@@ -333,7 +367,7 @@ class ImageListCommands:
 
         if url is None:
             if ctx.message.attachments:
-                url = ctx.message.attachments[0]
+                url = ctx.message.attachments[0].url
                 if url.endswith(":large"):
                     url = url[:-6]
                 elif url.endswith("large"):  # Twitter images suck
@@ -419,6 +453,68 @@ class ImageListCommands:
                 self.list_objs.append(new_obj)
                 await ctx.send("Album removed")
 
+    @commands.command()
+    async def sauce(self, ctx, previous: int = 1):
+        """
+        Get a link to the source of a picture posted by Porygon2.
+        Will only search back through the past 100 messages at most.
+
+        :param previous: Optional value for the number of pory posts to search back through.
+            Internally maxed at 10.
+        """
+
+        previous = min(previous, 10)  # cap at 10
+        # TODO Add note to the user that their search was capped at 10
+
+        own_posts_seen = 0
+
+        source_link = ""
+        target_msg = None
+
+        reverse_search_pfx = "https://www.google.com/searchbyimage?image_url={}"
+
+        # Run back through the channel history and find up to previous
+        async for message in ctx.message.channel.history(limit=100):
+            if message.author.id == self.bot.user.id:
+                own_posts_seen += 1
+                target_msg = message
+                if own_posts_seen == previous:
+                    # Pull out the image ID
+                    match = re.match("https?://i\.imgur\.com/(\w+)", message.content)
+
+                    # Require that the found message is just an imgur url.
+                    if match:
+                        try:
+                            # If our image comes from imgur, then it might have come from an image with a desc
+                            imgur_img = ImageList.imgur_client.get_image(match.group(1))
+
+                            if imgur_img and imgur_img.description is not None:
+                                # For this to work, image desc should only be a url with the dot surrounded by spaces
+                                source_link = imgur_img.description.replace(" . ", ".")
+                                break
+
+                        except ImgurClientError:
+                            # Just fall through and make the source link run through tineye
+                            pass
+                    else:
+                        await ctx.send("The message found was not an image command.")
+                        return
+
+                    # Generate Google image reverse search and jump out
+                    reverse_link = reverse_search_pfx.format(requests.utils.quote(message.content))
+                    source_link = "No direct source found.\n[Google Reverse Search Link]({})".format(reverse_link)
+                    break
+
+                elif own_posts_seen > previous:
+                    await ctx.send("Could not find the image you specified.")
+                    return
+
+        embed = discord.Embed(title="Image source results",
+                              description=source_link)
+        embed.set_image(url=target_msg.content)
+
+        await ctx.send(embed=embed)
+
     @checks.not_in_oaks_lab()
     @commands.command()
     async def nonya(self, ctx: Context) -> None:
@@ -442,7 +538,7 @@ class ImageListCommands:
                                " region")
             else:
                 obj = discord.utils.get(self.list_objs, name="nonya")
-                await ctx.send(obj.get_image())
+                await ctx.send(embed=self._get_source_embed(obj.get_image(self.get_blacklist("nonya"))))
 
     @commands.command(aliases=["shep"])
     async def loreal(self, ctx: Context) -> None:
@@ -456,7 +552,8 @@ class ImageListCommands:
     async def pmdnd(self, ctx: Context) -> None:
         if ctx.message.guild.id in [274060630170927114,
                                     283101596806676481,
-                                    239125949122215952]:
+                                    239125949122215952,
+                                    344285545742204940]:
             await self.process_command(ctx)
 
     @commands.command()
@@ -484,36 +581,57 @@ class ImageListCommands:
     async def cursejerk(self, ctx: Context) -> None:
         await self.process_command(ctx)
 
+    @checks.in_mez_server()
+    @commands.command()
+    async def mez(self, ctx: Context) -> None:
+        await self.process_command(ctx)
+
+    @checks.in_mez_server()
+    @commands.command()
+    async def furriend(self, ctx: Context) -> None:
+        await self.process_command(ctx)
+
     # Adding commands
 
     @commands.command(hidden=True)
-    async def addfug(self, ctx: Context, url: str=None) -> None:
+    async def addfug(self, ctx: Context, url: str = None) -> None:
         await self.add("fug", ctx, url, [125788490007838720, 78716152653553664])
 
     @commands.command(hidden=True)
-    async def addnonya(self, ctx: Context, url: str=None) -> None:
+    async def addnonya(self, ctx: Context, url: str = None) -> None:
         await self.add("nonya", ctx, url)
 
     @commands.command(hidden=True)
-    async def addloss(self, ctx: Context, url: str=None) -> None:
+    async def addloss(self, ctx: Context, url: str = None) -> None:
         await self.add("loss", ctx, url, [118599124156284929, 78716152653553664, 122661718974398468])
 
     @commands.command(hidden=True)
-    async def addloreal(self, ctx: Context, url: str=None) -> None:
+    async def addloreal(self, ctx: Context, url: str = None) -> None:
         await self.add("loreal", ctx, url, [98245271313481728, 114994340320903175])
 
     @commands.command(hidden=True)
-    async def addmenace(self, ctx: Context, url: str=None) -> None:
+    async def addmenace(self, ctx: Context, url: str = None) -> None:
         await self.add("salesmenace", ctx, url, [184516140872105984])
 
     @commands.command(hidden=True)
-    async def addluc(self, ctx: Context, url: str=None) -> None:
+    async def addluc(self, ctx: Context, url: str = None) -> None:
         await self.add("luc", ctx, url, [78716152653553664])
 
     @commands.command(hidden=True)
-    async def adddelet(self, ctx: Context, url: str=None) -> None:
+    async def adddelet(self, ctx: Context, url: str = None) -> None:
         await self.add("delet", ctx, url, [78716152653553664], target_album_id="11UlN")
 
+    @commands.command(hidden=True)
+    async def addfurriend(self, ctx: Context, url: str = None) -> None:
+        await self.add("furriend", ctx, url, [78716152653553664, 170969550332887040])
+
+    @checks.sudo()
+    @commands.command()
+    async def blacklist_img(self, ctx: Context, command_name: str, image_url: str):
+        self.config.sadd("img:{}:blacklist".format(command_name), image_url)
+        await ctx.send("Image has been blacklisted for command {}".format(command_name))
+
+    @commands.Cog.listener()
     async def on_timer_update(self, secs: int) -> None:
         if secs % 21600 == 0 and secs != 0:  # 6 hrs of uptime
             self.bot.loop.create_task(self.update_cache())

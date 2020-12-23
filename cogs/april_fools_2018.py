@@ -4,7 +4,7 @@ import logging
 log = logging.getLogger()
 
 
-class AprilFools2018:
+class AprilFools2018(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
@@ -31,6 +31,7 @@ class AprilFools2018:
     def guild(self):
         return self.bot.get_guild(234567)  # Borked on purpose since it seems to activate on its own
 
+    @commands.Cog.listener()
     async def on_message(self, message):
         if message.guild == self.guild and message.channel.id not in self.channel_blacklist:
             digimon_name = self.find_matching_substitution(message.content)

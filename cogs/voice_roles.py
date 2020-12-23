@@ -11,7 +11,7 @@ from discord.ext.commands import Bot, Context
 from .utils import checks
 
 
-class VoiceRoles:
+class VoiceRoles(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -82,6 +82,7 @@ class VoiceRoles:
         except IndexError:
             return True
 
+    @commands.Cog.listener()
     async def on_voice_state_update(self, before: Member, after: Member) -> None:
         role_settings = self.config.get("voice_roles").get(before.guild.id)
         server_role_cfg = role_settings.get(before.guild.id)

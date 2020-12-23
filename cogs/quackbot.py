@@ -6,10 +6,12 @@ import logging
 import asyncio
 from sys import stderr
 
+from discord.ext import commands
+
 log = logging.getLogger()
 
 
-class QuackBot:
+class QuackBot(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
@@ -35,6 +37,7 @@ class QuackBot:
                                                          after=lambda: self.quack_after(self._voice_client))
         player.start()
 
+    @commands.Cog.listener()
     async def on_timer_update(self, seconds):
         # Let's make it really not trigger that often
         rand = random.random()

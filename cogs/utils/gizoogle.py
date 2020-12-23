@@ -19,16 +19,15 @@ class String:
 
         url = "http://www.gizoogle.net/textilizer.php"
         async with aiohttp.ClientSession() as session:
-            with aiohttp.Timeout(10):
-                async with session.post(url,
-                                        data=params) as resp:
-                    # the html returned normally is in poor form
-                    soup_input = re.sub(r"/name=translatetext[^>]*>/",
-                                        r'name="translatetext" >', await resp.text())
-                    soup = bs4.BeautifulSoup(soup_input, "lxml")
-                    giz = (soup.find_all(text=True))
-                    giz_text = giz[37].strip("\r\n")  # Hacky, but consistent.
-                    return giz_text
+            async with session.post(url,
+                                    data=params) as resp:
+                # the html returned normally is in poor form
+                soup_input = re.sub(r"/name=translatetext[^>]*>/",
+                                    r'name="translatetext" >', await resp.text())
+                soup = bs4.BeautifulSoup(soup_input, "lxml")
+                giz = (soup.find_all(text=True))
+                giz_text = giz[37].strip("\r\n")  # Hacky, but consistent.
+                return giz_text
 
 
 class Website:

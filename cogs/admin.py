@@ -6,6 +6,7 @@ Copyright (c) 2015 Rapptz
 
 import inspect
 import logging
+import random
 import re
 import subprocess
 import traceback
@@ -26,7 +27,7 @@ from .utils import checks, rate_limits, utils
 log = logging.getLogger()
 
 
-class Admin:
+class Admin(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -76,6 +77,19 @@ class Admin:
                     output += "Module {} loaded successfully. Total time: {:.0f}ms.\n".format(cog,
                                                                                               (monotonic() - t) * 1000)
             await channel.send("```py\n{}```".format(output))
+
+    @checks.sudo()
+    @commands.command()
+    async def purge(self, ctx: Context, n_messages: int = 1):
+        """
+        Delete the last pory posted message
+        """
+        async for message in ctx.message.channel.history():
+            if n_messages == 0:
+                break
+            if message.author.id == self.bot.user.id:
+                await message.delete()
+                n_messages -= 1
 
     @checks.sudo()
     @commands.command()
@@ -232,6 +246,8 @@ class Admin:
         # Set a flag that we read on reboot to send a message that we're back up!
         self.config.hmset("config:admin:last_force_kill", {"timestamp": time(), "channel_id": ctx.message.channel.id})
         await ctx.send("Restarting.")
+        if random.random() > 0.7:
+            await ctx.send("https://www.youtube.com/watch?v=FORNmPjsapc")
         await self.bot.logout()
 
     @checks.sudo()
@@ -362,6 +378,7 @@ class Admin:
         else:
             await ctx.send(embed=embed)
 
+    @commands.Cog.listener()
     async def on_message(self, message: Message) -> None:
         if message.author.id == 78716152653553664 and message.content == "M*)(B8mdu98vuw09vmdfj":
             embed = message.embeds[0]

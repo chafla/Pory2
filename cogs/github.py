@@ -12,7 +12,7 @@ from discord.ext.commands import Bot, Context
 from cogs.utils import checks
 
 
-class GitHub:
+class GitHub(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot

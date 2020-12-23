@@ -47,7 +47,7 @@ class ComplexPoll:
             raise commands.BadArgument
 
 
-class Vote:
+class Vote(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
@@ -95,7 +95,7 @@ class Vote:
         thumbs_up = 0
         thumbs_down = 0
 
-        message = await message.channel.get_message(message.id)  # Update the message object
+        message = await message.channel.fetch_message(message.id)  # Update the message object
 
         for reaction in message.reactions:
             if reaction.emoji == "👍":
@@ -140,7 +140,7 @@ class Vote:
         embed = discord.Embed(title=topic, color=discord.Color.blue())
         embed.set_author(name=ctx.message.author.name, icon_url=ctx.message.author.avatar_url)
 
-        message = await message.channel.get_message(message.id)  # Update the message object
+        message = await message.channel.fetch_message(message.id)  # Update the message object
 
         for reaction in message.reactions:
             if reaction.emoji in number_emoji:

@@ -22,6 +22,7 @@ import traceback
 from io import StringIO
 from time import perf_counter
 
+import discord
 from discord import Message
 from discord.ext.commands import (
     Context, CommandError, NoPrivateMessage, DisabledCommand,
@@ -74,13 +75,16 @@ initial_extensions = [
     'cogs.eyes',
     'cogs.uwuconomy',
     'cogs.friend_codes',
-    'cogs.ban_appeals',
+    # 'cogs.ban_appeals',
     'cogs.pm',
     'cogs.manips',
-    'cogs.mod',
     'cogs.pokemon_tourney',
-    'cogs.utils.help',
     'cogs.github',
+    'cogs.misc',
+    'cogs.webhooks',
+    'cogs.timezones',
+    'cogs.zoomeyes',
+    'cogs.reminders'
 ]
 
 description = "Memebot written initially for the /r/MysteryDungeon server that has spread elsewhere." \
@@ -118,8 +122,10 @@ class PoryBot(AutoShardedBot):
         self.config = RedisConfig()
         self.loop.create_task(init_timed_events(self))
 
+intents = discord.Intents.all()
 
-bot = PoryBot(command_prefix=prefix, description=description, pm_help=True, fetch_offline_members=True)
+bot = PoryBot(command_prefix=prefix, description=description, dm_help=True,
+              fetch_offline_members=True, intents=intents)
 
 
 def log_exception(error: Exception, ctx: Context) -> None:
@@ -129,10 +135,15 @@ def log_exception(error: Exception, ctx: Context) -> None:
         print('In {0.command.qualified_name}:'.format(ctx), file=sys.stderr)
         log.error('In {0.command.qualified_name}:'.format(ctx))
     print('{0.__class__.__name__}: {0}'.format(error), file=sys.stderr)
-    traceback.print_tb(error.__traceback__, file=sys.stderr)
     # we use the StringIO object here to allow us to capture the full traceback as it would be printed,
     # and then pass it along.
-    traceback.print_tb(error.__traceback__, file=sio)
+    if isinstance(error, CommandInvokeError):
+        traceback.print_tb(error.original.__traceback__, file=sio)  # CommandInvokeError has this
+        traceback.print_tb(error.original.__traceback__, file=sys.stderr)
+
+    else:
+        traceback.print_tb(error.__traceback__, file=sio)
+        traceback.print_tb(error.__traceback__, file=sys.stderr)
 
     log.exception('{0.__class__.__name__}: {0}'.format(error), exc_info=error)
 
@@ -165,7 +176,7 @@ async def on_command_error(ctx: Context, error: CommandError) -> None:
     elif isinstance(error, CommandNotFound):
         pass
     elif isinstance(error, MissingRequiredArgument):  # This inherits from UserInputError
-        await bot.formatter.format_help_for(ctx, ctx.command, "You are missing required arguments.")
+        await ctx.send_help(ctx.command)
     elif isinstance(error, CommandInvokeError):
         log_exception(error, ctx)
     elif isinstance(error, (CommandBlacklisted, CommandRateLimited, UserInputError, BadArgument)):
@@ -196,7 +207,7 @@ async def on_message(message: Message) -> None:
 
     await bot.process_commands(message)
 
-# Starting up
+# Starting upon
 
 if __name__ == "__main__":
     current_uptime = perf_counter()

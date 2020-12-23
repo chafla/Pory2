@@ -24,7 +24,7 @@ T_GuildChannel = Union[GroupChannel, TextChannel, VoiceChannel]
 log = logging.getLogger()
 
 
-class Logs:
+class Logs(commands.Cog):
     """Log channels"""
     # TODO: Refactor because it comes directly from the old code
 
@@ -49,8 +49,11 @@ class Logs:
     async def initialize_channels(self) -> None:
         await self.bot.wait_until_ready()
         guild = self.bot.get_guild(111504456838819840)
-        for channel in guild.channels:
-            self.config.sadd("chan:{}:names".format(channel.id), channel.name)
+        try:
+            for channel in guild.channels:
+                self.config.sadd("chan:{}:names".format(channel.id), channel.name)
+        except AttributeError:
+            pass
 
     @checks.sudo()
     @commands.command()
@@ -86,6 +89,7 @@ class Logs:
         self.config.delete("user:{}:logs:enabled".format(ctx.message.author.id))
         await ctx.send("You've now disabled logging for usermarkov and get_wc.")
 
+    @commands.Cog.listener()
     async def on_message(self, message: Message) -> None:
 
         if message.author.id == self.bot.user.id:
@@ -178,13 +182,12 @@ class Logs:
                 and message.channel.name != "earnest_chat":
 
             # If in r/pokemon, users have the verified role, otherwise they should have used !enable_logging
-            if (message.guild.id == 111504456838819840 and discord.utils.get(message.author.roles,
-                                                                             id=349077573977899011))\
-                    or self.config.get("user:{}:logs:enabled".format(message.author.id)) is True:
+            if self.config.get("user:{}:logs:enabled".format(message.author.id)) is True:
 
                 with open(r'message_cache/users/{0}.txt'.format(message.author.id), 'a', encoding='utf-8') as tmp:
                     tmp.write("{0}\n".format(message.content))
 
+    @commands.Cog.listener()
     async def on_message_edit(self, before: Message, after: Message) -> None:
         if not isinstance(before.channel, discord.DMChannel) and before.guild == self.guild \
                 and before.content != after.content:  # Don't catch embed updates
@@ -195,6 +198,7 @@ class Logs:
                 tmp.write("[{0}] [EDITED] ({1}) {2}: {3} \n".format(ts, before.author.id, before.author.name,
                                                                     after.content))
 
+    @commands.Cog.listener()
     async def on_message_delete(self, message: Message) -> None:
         if not isinstance(message.channel, discord.DMChannel) and message.guild == self.guild:
             with open(r'message_cache/channels/{0}.txt'.format(message.channel.id), 'a',
@@ -211,14 +215,17 @@ class Logs:
         if after.guild == self.guild and before.name != after.name:
             self.config.sadd("chan:{}:names".format(before.id), after.name)
 
+    @commands.Cog.listener()
     async def on_channel_delete(self, channel: T_GuildChannel) -> None:
         if not isinstance(channel, discord.DMChannel) and channel.guild == self.guild:
             self.config.set("chan:{}:deleted".format(channel.id), datetime.datetime.now())
 
+    @commands.Cog.listener()
     async def on_channel_create(self, channel: T_GuildChannel) -> None:
         if not isinstance(channel, discord.DMChannel) and channel.guild == self.guild:
             self.config.sadd("chan:{}:names".format(channel.id), channel.name)
 
+    @commands.Cog.listener()
     async def on_member_update(self, before: Member, after: Member) -> None:
         if before.nick != after.nick and after.guild == self.guild:
             # Keep track of member nicknames

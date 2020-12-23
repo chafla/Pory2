@@ -1,13 +1,13 @@
-
 import datetime
 import glob
 import random
 import re
 import os
+import traceback
 
 from os import path
-from datetime import datetime
-from typing import Dict, Tuple, Union, Optional
+from datetime import datetime, timedelta
+from typing import Dict, Tuple, Union, Optional, List
 
 import discord
 from asyncio import sleep
@@ -23,54 +23,54 @@ def num_emoji(num: int) -> str:
     return "{}⃣".format(num)
 
 
+dice_pattern = re.compile(r"(\d*)d(\d+)(?:\+(\d+))?")
+
+
 class Rollable:
-    """Small type to allow for a few different inputs"""
+    """
+    Small type to allow for a few different inputs, and for the value to be created automatically
+    as an argument
+    """
+
+    MAX_ROLLS = 30
 
     def __init__(self, argument: str) -> None:
-        self.n_dice = 1
         if argument == "rick":
             raise commands.BadArgument("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        cleaned_arg = argument.lstrip("d")  # remove a leading d
 
-        if " " not in cleaned_arg:  # new-style command
-            arg_split = [i.strip("d") for i in cleaned_arg.split("d")]
+        # Use regex to be smart about it
+        match = re.search(dice_pattern, argument)
 
-            if len(arg_split) == 2:  # It's split into ("4", "4") and not ("", "4")
-                try:
-                    self.n_dice = int(arg_split[0])
-                except ValueError:
-                    raise commands.BadArgument("Could not convert number of dice to an integer")
+        if not match:
+            raise commands.BadArgument("Invalid command format. [dice count]d<side count>[+<modifier>]")
 
-                try:
-                    self.value = int(arg_split[1])
-                except ValueError:
-                    raise commands.BadArgument("Could not convert dice sides into an integer")
-            elif len(arg_split) == 1:
-                try:
-                    self.value = int(arg_split[0])
-                except ValueError:
-                    raise commands.BadArgument("Could not convert dice sides to integer")
-            else:
-                raise commands.BadArgument("Too many arguments were specified")
+        count = match.group(1)
+        self.sides = max(int(match.group(2)), 1)
+        modifier = match.group(3)
 
+        if self.sides < 1:
+            raise commands.BadArgument("Cannot roll a 0-sided die.")
+
+        if not count or int(count) < 1:
+            self.rolls = 1
         else:
+            self.rolls = int(count)
 
-            arg_split = [i.strip("d") for i in cleaned_arg.split(" ")]
+        if not modifier:
+            self.modifier = 0
+        else:
+            self.modifier = int(modifier)
 
-            if len(arg_split) == 1:
-                try:
-                    self.value = int(arg_split[0])
-                except ValueError:
-                    raise commands.BadArgument("Could not convert dice sides to integer")
-            else:
-                try:
-                    self.value = int(arg_split[0])
-                    self.n_dice = int(arg_split[1])
-                except ValueError:
-                    raise commands.BadArgument("Could not convert parameter `sides` to type 'int'.")
+    def cast_roll(self) -> List[int]:
+        """
+        Roll a dice based on the params stored in the object
+        :return: List of all rolled values.
+        """
+        roll_output = []
 
-    def __int__(self) -> int:
-        return self.value
+        for roll in range(min(self.rolls, self.MAX_ROLLS)):  # Cap our roll count
+            roll_output.append(random.randint(1, self.sides))
+        return roll_output
 
 
 class DHMSTimestamp:
@@ -182,7 +182,7 @@ class Countdown:
         }
 
 
-class General:
+class General(commands.Cog):
     """General commands"""
 
     def __init__(self, bot: Bot) -> None:
@@ -208,6 +208,92 @@ class General:
         else:
             return self.config.get("user:{}:logs:enabled".format(ctx.message.author.id)) is True
 
+    def _generate_among_us_msg(self, name: str):
+        n_lines = 6
+        max_width = 40 + len(name)
+        space = "　"
+        space_width = 4
+        star_chance = 0.25
+        stars = ["•", "。", ".", "ﾟ", "'", ","]
+        spaceman = "ඞ"
+        placed_spaceman = False
+        output_lines = []
+
+        # Pad with a random amount of characters
+        #   but ensure that spaces are significantly more common
+
+        # Randomly place the spaceman on lines 2 or three
+        # It has to go somewhere, so we'll just pre-position it
+        spaceman_col = random.randint(5, 35)
+        spaceman_row = random.randint(1, 2)
+
+        # Remind me why I told myself I'd make a text formatting command again?
+
+        r = 0
+        while r < n_lines:
+            c = 0
+            cur_line = []
+            while c < max_width:
+                if c >= spaceman_col and r == spaceman_row and not placed_spaceman:
+                    cur_line.append(" ")
+                    cur_line.append(spaceman)
+                    c += 2
+                    placed_spaceman = True
+                elif r == 3 or r == 4:
+                    if r == 3:
+                        text_fmt = "{}{} was{} The Imposter. ".format(
+                            " " * space_width,
+                            name,
+                            random.choice([" not", ""])
+                        )
+                        text_fmt = text_fmt.replace("%", "\\%")
+                    else:
+                        n_imposters = random.randint(1, 3)
+                        text_fmt = "{}**{} Imposter{} remain{}. **".format(
+                            " " * space_width,
+                            n_imposters,
+                            "s" if n_imposters != 1 else "",
+                            "" if n_imposters != 1 else "s"
+
+                        )
+
+                    text_center = text_fmt.center(max_width, "%")
+                    i = 0
+                    while i < len(text_center):
+                        ch = text_center[i]
+
+                        # Check for escapes
+                        if i < len(text_center) - 1 and ch == "\\" and text_center[i + 1] == "%":
+                            cur_line.append("%")
+                            i += 2
+                        # make replacements
+                        elif ch == "%":
+                            if random.random() < star_chance:
+                                cur_line.append(random.choice(stars))
+                                i += 1
+                            else:
+                                cur_line.append(space)
+                                i += space_width  # Spaces are much longer
+                        else:
+                            cur_line.append(ch)
+                            i += 1
+
+                    # Force the creation of a new line
+                    break
+
+                else:
+                    if random.random() < star_chance:
+                        cur_line.append(random.choice(stars))
+                        c += 1
+                    else:
+                        cur_line.append(space)
+                        c += 3  # Spaces are much longer
+
+            output_lines.append("".join(cur_line))
+            r += 1
+
+        return "\n\n".join(output_lines)
+
     async def check_verification(self, ctx: Context) -> bool:
         verification = self._is_verified(ctx)
         if verification:
@@ -221,45 +307,55 @@ class General:
             return False
 
     @commands.command()
+    async def among(self, ctx: Context, *, target: str = None) -> None:
+        rate_limits.MemeCommand.check_rate_limit(ctx)
+        if not target:
+            target = getattr(ctx.author, "nick", ctx.author.name)
+        response = self._generate_among_us_msg(target)
+
+        await ctx.send(response)
+
+    @commands.command()
     async def ping(self, ctx: Context) -> None:
         response = await ctx.send("Pong!")
 
-        dif = (response.created_at - ctx.message.created_at).total_seconds() * 1000
+        # Get a timedelta, then convert it to seconds
+        dif = (datetime.utcnow() - response.created_at).total_seconds() * 1000
+
+        await ctx.send("Response time: `{}ms`".format(dif))
+
+    @commands.command()
+    async def PING(self, ctx: Context):
+        response = await ctx.send("**PONG**")
+        # Get a timedelta, then convert it to seconds
+        dif = (datetime.utcnow() - response.created_at).total_seconds() * 1000
 
         await ctx.send("Response time: `{}ms`".format(dif))
 
     @checks.not_rmd()
     @checks.not_pmdnd()
-    @commands.command(aliases=["rolld"])
-    async def roll(self, ctx: Context, *, roll: Rollable) -> None:
+    @commands.command(aliases=["rolld", "r"])
+    async def roll(self, ctx: Context, roll: Rollable) -> None:
         """Roll a die, or a few.
 
-        Can be formatted as '!roll <sides>', '!roll <sides> <rolls>', or '!roll <rolls>d<sides>."""
+        Can be formatted as '!roll <num rolls>d<num sides>[+modifier]"""
 
-        rolls = roll.n_dice
-        sides = roll.value
+        output = ""
 
-        if rolls == 1:  # Just !roll 3
-            num = random.randint(1, abs(sides))
-            await ctx.send("Rolled {}".format(num))
+        if roll.rolls > roll.MAX_ROLLS:
+            output += "Too many dice rolled, rolling a maxcap of {} instead.\n".format(roll.MAX_ROLLS)
 
-        else:  # !roll 3 4;
-            max_rolls = 30
-            output = ""
-            if rolls > max_rolls:
-                output += "Too many dice rolled, rolling {} instead.\n".format(max_rolls)
-                rolls = max_rolls
+        roll_result = roll.cast_roll()
 
-            elif rolls < 0 or sides < 1:
-                await ctx.send("Value too low.")
-                return
+        output += "**[** `{}` **]**".format("` + `".join([str(i) for i in roll_result]))
 
-            output += "Rolling {}d{}:\n".format(rolls, sides)
-            for roll in range(rolls):
-                roll_result = random.randint(1, sides)
-                output += "`{}` ".format(roll_result)
+        if roll.modifier == 0:
+            output += "\n**{}**".format(sum(roll_result))
+        else:
+            sum_roll = sum(roll_result)
+            output += "\n{} + {} = **{}**".format(sum_roll, roll.modifier, roll.modifier + sum_roll)
 
-            await ctx.send(output)
+        await ctx.send(output)
 
     @commands.command(aliases=["thinking"])
     async def think(self, ctx: Context, *, text: str) -> None:
@@ -297,7 +393,7 @@ class General:
         await ctx.send("https://www.youtube.com/watch?v=flL5b1NaSPE")
 
     @commands.command()
-    async def userinfo(self, ctx: Context, member: Member=None) -> None:
+    async def userinfo(self, ctx: Context, member: Member = None) -> None:
         """Get a user's information"""
 
         if member is None:
@@ -323,7 +419,7 @@ class General:
         await ctx.send(embed=embed)
 
     @commands.command(hidden=True)
-    async def userinfo_simple(self, ctx: Context, *, member: Member=None) -> None:
+    async def userinfo_simple(self, ctx: Context, *, member: Member = None) -> None:
         """Simple userinfo to aid mobile users"""
 
         if not member:
@@ -350,43 +446,6 @@ class General:
         params = {"q": link}
         await ctx.send("http://lmgtfy.com/?{0}".format(urlencode(params)))
 
-    @commands.group(invoke_without_command=True)
-    async def countdown(self, ctx: Context, name: str) -> None:
-        """Show the time left for a countdown"""
-        countdown = self.countdowns.get(name)
-        if countdown is None:
-            await ctx.send("Countdown {} doesn't exist. Try !countdown list for active countdowns.".format(name))
-        elif not countdown["completed"]:
-            diff = Countdown.seconds_remaining(countdown["time"])
-            await ctx.send("{} left until {}".format(diff, countdown["name"]))
-        else:
-            await ctx.send("`{}` occurred on {}.".format(countdown["message"], countdown["end"]))
-
-    @checks.is_regular()
-    @countdown.command()
-    async def add(
-            self, ctx: Context, name: str, timestamp: str, *, description: str
-    ) -> None:
-        """Add a countdown. Format: `[name] | [YYYY-MM-DD HH:MM:SS] | [desc]`"""
-
-        countdown = await Countdown.create_countdown(name, description, timestamp, ctx)
-        await self.countdowns.put(name, countdown.copy())
-
-    @add.error
-    async def add_error(self, ctx: Context, error: Exception) -> None:
-        if type(error) == RuntimeError:
-            await ctx.send(error)
-
-    @countdown.command()
-    async def list(self, ctx: Context) -> None:
-        """List active countdowns."""
-        output = ""
-        for name in self.countdowns:
-                cd_info = self.countdowns.get(name)
-                output += "**{}**: {}\n".format(cd_info["name"], cd_info["time"])
-
-        await ctx.send(output)
-
     @staticmethod
     def timestamp_to_seconds(timestamp: str) -> Optional[int]:
         """Take in a time in _h_m_s format"""
@@ -407,7 +466,7 @@ class General:
 
     @checks.is_regular()
     @commands.command()
-    async def timer(self, ctx: Context, timestamp: DHMSTimestamp, *, name: str=None) -> None:
+    async def timer(self, ctx: Context, timestamp: DHMSTimestamp, *, name: str = None) -> None:
         """Format: !timer time(HH:MM:SS) [name]"""
         seconds = timestamp.seconds
         if seconds is None or seconds == 0:
@@ -481,7 +540,7 @@ class General:
                                                                                           chosen[num_chosen][1])
 
         # msg = await self.bot.get_message(ctx.message.channel, msg.id)  # Update the message object
-        msg = await ctx.message.channel.get_message(msg.id)
+        msg = await ctx.message.channel.fetch_message(msg.id)
 
         # Get the users that guessed correctly
 
@@ -542,7 +601,7 @@ class General:
                        "doctor")
 
     @commands.command()
-    async def get_wc(self, ctx: Context, *, user: str=None) -> None:
+    async def get_wc(self, ctx: Context, *, user: str = None) -> None:
         """Get a wordcloud comprised of a user's history"""
         message = ctx.message
         if await self.check_verification(ctx) and rate_limits.MemeCommand.check_rate_limit(ctx, 15):
@@ -582,14 +641,15 @@ class General:
                         await ctx.send("You used {0}'s {1}!".format(target, line_chosen[:-1]))
                     else:
                         await ctx.send("You tried to use {0}'s {1}, but it activated on yourself!".format(
-                                                      target, line_chosen[:-1]))
+                            target, line_chosen[:-1]))
 
             else:  # Itemizer time
                 with open('carve_reg.txt') as f:
                     line_chosen = random.choice(f.readlines())  # Currently 291 items
                     await ctx.send("You activated {0}'s Itemizer Orb, turning you into a {1}!".format(
-                                                  target, line_chosen[:-1]))
+                        target, line_chosen[:-1]))
 
+    @commands.Cog.listener()
     async def on_timer_update(self, seconds: int) -> None:
         if seconds % 10 == 0:
             # Check for countdowns expiring
@@ -603,6 +663,7 @@ class General:
                     countdown["completed"] = True
                     await self.countdowns.put(name, countdown)
 
+    @commands.Cog.listener()
     async def on_message(self, message: Message) -> None:
         if len(message.mentions) > 0 \
                 and message.mentions[0].id == self.bot.user.id \

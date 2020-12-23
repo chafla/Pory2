@@ -214,6 +214,7 @@ class RegularUtils:
         """Reset all active regular requests"""
         self.config.delete(*self.config.scan_iter("config:regulars:apps:*"))
 
+    @commands.Cog.listener()
     async def on_timer_update(self, seconds):
         if seconds % 120 == 0:
             if self.creds.access_token_expired:

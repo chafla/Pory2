@@ -213,7 +213,7 @@ class DurationTimeStamp(Timestamp):
         return int((self.to_timedelta() - datetime.datetime.utcnow()).total_seconds())
 
 
-class Mod:
+class Mod(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -325,10 +325,13 @@ class Mod:
         else:
             await ctx.send("Reminder `{}` not found.".format(timestamp))
 
+    @commands.Cog.listener()
     async def on_member_update(self, before: Member, after: Member) -> None:
         invalid_nicks = ["everyone", "here", "mods", "bot dev team", "admin", "general moderator",
                          "franchise moderator", "topic moderator", "voice moderator", "mod in training (mit)",
                          "regular manager"]
+        if self.r_pkmn is None:
+            return
         if after.guild.id == self.r_pkmn.id and before.nick != after.nick and after.nick is not None:
             stripped_nick = after.nick.lower().replace("\u200b", "")  # Yank out zero width space
             if stripped_nick in invalid_nicks:
@@ -336,6 +339,7 @@ class Mod:
                 await after.send("In order to reduce abuse, your nickname has been reset.")
                 await self.add_mod_note(after.id, "[BOT] Set nickname to {}, reset automatically.".format(after.nick))
 
+    @commands.Cog.listener()
     async def on_timer_update(self, secs: int) -> None:
         # Every 10 seconds, check to see if the event matches the current time
         # If so, trigger.

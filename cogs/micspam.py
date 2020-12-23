@@ -2,12 +2,19 @@
 import asyncio
 import glob
 import logging
+from typing import List, Union
+import re
+import requests.utils
+
 import discord
 from discord.ext import commands
+from discord.ext.commands import Context
+
 from .utils import checks
 from cogs.utils.audio import audio_utils
 from sys import stderr
 from .utils.utils import check_ids, check_urls
+from .utils.audio.voiceloader_async import VoiceLoaderAsync
 from os import remove
 import random
 
@@ -26,11 +33,12 @@ class CtxMessageWrapper:
         return self.channel.send(*args, **kwargs)
 
 
-class Micspam:
+class Micspam(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
         self.downloader = audio_utils.Downloader()
+        self.config = bot.config
 
     @staticmethod
     def get_micspam(clip_chosen, song_list):
@@ -58,57 +66,80 @@ class Micspam:
             print('{0.__class__.__name__}: {0}'.format(e), file=stderr)
 
     async def _connect_cleanly(self, voice_channel):
-        current_connection = discord.utils.find(lambda c: c.channel.guild.id == voice_channel.guild.id,
-                                                self.bot.voice_clients)
-        if current_connection is not None:
+        current_connection = voice_channel.guild.voice_client
+        if current_connection:
             await current_connection.disconnect()
         return await voice_channel.connect()
 
-    async def play_micspam(self, channel, clip_chosen, ctx):
+    async def play_micspam(self, channel, clip_chosen, ctx, volume: float = 1.0):
         """Formerly are_you_capping()"""
         voice_client = None
         downloaded = False
 
         meme_list = glob.glob("micspam/*.*")
 
-        if hasattr(ctx.author, "voice") and ctx.author.voice is not None:
-            voice_client = await self._connect_cleanly(ctx.author.voice.channel)
-        elif check_ids(str(channel)):
-            chan = self.bot.get_channel(int(channel))
-            voice_client = await self._connect_cleanly(chan)
-        else:
-            try:
-                for guild in self.bot.guilds:
-                    if guild.id in [111504456838819840, 110373943822540800, 155800402514673664,
-                                    78716585996455936, 78469422049665024]:
-                        chan = discord.utils.get(guild.voice_channels, name=str(channel))
-                        if chan is None:
-                            continue
-                        else:
-                            voice_client = await self._connect_cleanly(chan)
-                            log.info("Micspam bound successfully to {.name}".format(voice_client.channel.name))
-                            break
+        try:
 
-            except Exception as e:
-                log.exception("Error in micspam")
-                await ctx.send("Couldn't find that channel or already connected")
+            if hasattr(ctx.author, "voice") and ctx.author.voice is not None:
+                voice_client = await self._connect_cleanly(ctx.author.voice.channel)
+            elif check_ids(str(channel)):
+                chan = self.bot.get_channel(int(channel))
+                voice_client = await self._connect_cleanly(chan)
+            else:
+                try:
+                    for guild in self.bot.guilds:
+                        if guild.id in [111504456838819840, 110373943822540800, 155800402514673664,
+                                        78716585996455936, 78469422049665024, 344285545742204940]:
+                            chan = discord.utils.get(guild.voice_channels, name=str(channel))
+                            if chan is None:
+                                continue
+                            else:
+                                voice_client = await self._connect_cleanly(chan)
+                                log.info("Micspam bound successfully to {.name}".format(voice_client.channel))
+                                break
+
+                except Exception as e:
+                    log.exception("Error in micspam")
+                    try:
+                        await ctx.send("Couldn't find that channel or already connected")
+                    except discord.ClientException:
+                        pass
+                    return
+
+            if check_urls(str(clip_chosen)):
+                await self.downloader.download_audio_threaded(clip_chosen)
+                stats = await self.downloader.download_stats_threaded(clip_chosen)
+                micspam_path = stats["expected_filename"]
+                downloaded = True
+            else:
+                micspam_path = self.get_micspam(int(clip_chosen), meme_list)
+
+            if micspam_path is not None:
+                audio_source = discord.FFmpegPCMAudio(micspam_path)
+                audio_source = discord.PCMVolumeTransformer(audio_source, volume)
+                voice_client.play(audio_source, after=lambda err: self.micspam_after(voice_client, err, micspam_path,
+                                                                                     downloaded))
+            else:
+                try:
+                    await ctx.message.channel.send("That micspam value doesn't exist.")
+                except discord.ClientException:
+                    pass
                 return
 
-        if check_urls(str(clip_chosen)):
-            await self.downloader.download_audio_threaded(clip_chosen)
-            stats = await self.downloader.download_stats_threaded(clip_chosen)
-            micspam_path = stats["expected_filename"]
-            downloaded = True
-        else:
-            micspam_path = self.get_micspam(int(clip_chosen), meme_list)
+        except Exception as e:
+            # Ensure we don't get pory stuck in here
+            if voice_client:
+                await voice_client.disconnect(force=True)
+            raise e
 
-        if micspam_path is not None:
-            audio_source = discord.FFmpegPCMAudio(micspam_path)
-            voice_client.play(audio_source, after=lambda err: self.micspam_after(voice_client, err, micspam_path,
-                                                                                 downloaded))
-        else:
-            await ctx.message.channel.send("That micspam value doesn't exist.")
-            return
+    @checks.sudo()
+    @commands.command()
+    async def reset(self, ctx: Context):
+        """
+        Reset all voice clients in the current guild.
+        """
+        if ctx.guild.voice_client is not None:
+            await ctx.guild.voice_client.disconnect(force=True)
 
     @checks.sudo()
     @commands.command(hidden=True, pass_context=True, aliases=["spam"])
@@ -138,17 +169,75 @@ class Micspam:
 
         await ctx.send(output_msg)
 
+    @commands.command(hidden=True)
+    async def moonbase(self, ctx, *, message: str):
+        if ctx.message.author.voice is not None:
+            endpoint = "http://tts.cyzon.us/tts?text={}".format(requests.utils.quote(message))
+            await self.play_micspam(ctx.message.author.voice.channel, endpoint, ctx, 3)
+
+    @commands.command(hidden=True)
+    async def tts(self, ctx, *, message: str):
+        if ctx.message.author.voice is not None:
+            voice_loader = VoiceLoaderAsync()
+            if len(message) > 300:
+                await ctx.send("Message too long, trimmed to 300 chars")
+            url = await voice_loader.process_text(message[:300], "WillFromAfar")
+            await self.play_micspam(ctx.message.author.voice.channel.id, url, ctx)
+
+    @commands.command(hidden=True)
+    async def randtts(self, ctx, *, message: str):
+        if ctx.message.author.voice is not None:
+            voice_loader = VoiceLoaderAsync()
+            voice = random.choice(voice_loader.voices)
+            url = await voice_loader.process_text(message[:300], voice.name)
+            if len(message) > 300:
+                await ctx.send("Message too long, trimmed to 300 chars")
+            await self.play_micspam(ctx.message.author.voice.channel.id, url, ctx)
+
+    @commands.command(hidden=True)
+    async def choice_tts(self, ctx, voice: str, *, message: str):
+        if ctx.message.author.voice is not None:
+            voice_loader = VoiceLoaderAsync()
+            url = await voice_loader.process_text(message[:300], voice)
+            if len(message) > 300:
+                await ctx.send("Message too long, trimmed to 300 chars")
+            await self.play_micspam(ctx.message.author.voice.channel.id, url, ctx)
+
+    @commands.command(hidden=True)
+    async def yoda(self, ctx, *, message: str):
+        if ctx.message.author.voice is not None:
+            voice_loader = VoiceLoaderAsync()
+            url = await voice_loader.process_text(message[:300], "WillLittleCreature")
+            if len(message) > 300:
+                await ctx.send("Message too long, trimmed to 300 chars")
+            await self.play_micspam(ctx.message.author.voice.channel.id, url, ctx)
+
     async def kill_voice_connections(self):
         for voice_obj in self.bot.voice_clients:
-            await voice_obj.disconnect()
+            await voice_obj.disconnect(force=True)
 
-    async def on_message(self, message):
-        # TODO FIX THIS NASTY HACK
-        if message.guild is not None and message.guild.id in [274731851661443074, 283101596806676481, 401182039421747210, 78716585996455936, 146626123990564864, 392161981261545473, 484966083795746816]\
-                and "owo" in message.content.lower() and message.author.voice is not None:
-            await self.play_micspam(message.author.voice.channel.name,
-                                    random.choice([2, 10, 19, 22, 29, 34, 38]),
+    async def respond_to_keyword(self, message, allowed_guilds: List[int], response: int):
+        if message.guild is not None and message.guild.id in allowed_guilds and \
+                message.author.voice is not None:
+            await self.play_micspam(message.author.voice.channel.id,
+                                    response,
                                     CtxMessageWrapper(message))
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # TODO FIX THIS NASTY HACK
+        if "owo" in message.content:
+            await self.respond_to_keyword(message,
+                                          [274731851661443074, 283101596806676481, 401182039421747210, 78716585996455936, 146626123990564864, 392161981261545473, 484966083795746816],
+                                          random.choice([2, 11, 20, 23, 30, 36, 40]))
+        elif " goo " in message.content or (message.content == "goo" and not message.content == "!goo"):
+            await self.respond_to_keyword(message,
+                                          [78716585996455936, 344285545742204940],
+                                          31)
+        elif "quagf" in message.content:
+            await self.respond_to_keyword(message,
+                                          [78716585996455936, 344285545742204940],
+                                          3)
 
     def __unload(self):
         if self.bot.voice_clients:

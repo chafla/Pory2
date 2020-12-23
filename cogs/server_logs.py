@@ -38,7 +38,7 @@ class UserType:
             raise commands.BadArgument
 
 
-class ServerLogs:
+class ServerLogs(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
@@ -174,6 +174,7 @@ class ServerLogs:
 
         await self.send_embed_to_modlog(embed, ctx.guild, priority=priority)
 
+    @commands.Cog.listener()
     async def on_member_ban(self, guild, user):
         if self._is_tracked(guild, priority_event=True):
             priority_modlog = self.bot.get_channel(int(self._config_cache[guild.id]["priority_modlog"]))
@@ -202,6 +203,7 @@ class ServerLogs:
 
             await self.send_embed_to_modlog(embed, guild.id, priority=True)
 
+    @commands.Cog.listener()
     async def on_member_unban(self, guild, user):
         if self._is_tracked(guild, priority_event=True):
             embed = discord.Embed(title="User {0.name}#{0.discriminator} was unbanned.".format(user))
@@ -216,6 +218,7 @@ class ServerLogs:
 
             await self.send_embed_to_modlog(embed, guild.id, priority=True)
 
+    @commands.Cog.listener()
     async def on_member_join(self, member):
         if self._is_tracked(member.guild):
             embed = discord.Embed(title="User {0.name}#{0.discriminator} joined.".format(member),
@@ -227,6 +230,7 @@ class ServerLogs:
 
             await self.send_embed_to_modlog(embed, member.guild.id)
 
+    @commands.Cog.listener()
     async def on_member_remove(self, member):
         if self._is_tracked(member.guild):
 
@@ -269,6 +273,7 @@ class ServerLogs:
 
             await self.send_embed_to_modlog(embed, member.guild, priority=leave_was_kick)
 
+    @commands.Cog.listener()
     async def on_message_delete(self, message):
         if self._is_tracked(message.guild):
 
@@ -324,6 +329,7 @@ class ServerLogs:
 
             await self.send_embed_to_modlog(embed, message.guild.id, file=reupload)
 
+    @commands.Cog.listener()
     async def on_message_edit(self, before, after):
         if self._is_tracked(before.guild) and before.content != after.content and not isinstance(before.channel,
                                                                                                  discord.DMChannel):
@@ -338,6 +344,7 @@ class ServerLogs:
 
             await self.send_embed_to_modlog(embed, before.guild.id)
 
+    @commands.Cog.listener()
     async def on_member_update(self, before, after):
         if self._is_tracked(before.guild):
             if before.name != after.name:
@@ -439,7 +446,7 @@ class ServerLogs:
         else:
             # Check it as if it is a message ID
             try:
-                msg = ctx.message.channel.get_message(message_id)
+                msg = ctx.message.channel.fetch_message(message_id)
             except discord.NotFound or discord.HTTPException:
                 pass
 
@@ -470,6 +477,7 @@ class ServerLogs:
 
         await ctx.message.delete()
 
+    @commands.Cog.listener()
     async def on_message(self, message):
         if len(message.role_mentions) > 0 and discord.utils.get(message.role_mentions, name="Mods") is not None:
             embed = discord.Embed(title="Message by {0.name}#{0.discriminator} mentioned mods.".format(message.author),

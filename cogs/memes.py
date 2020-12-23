@@ -21,7 +21,7 @@ from .utils.rate_limits import MemeCommand
 log = logging.getLogger()
 
 
-class RateLimitedMemes:
+class RateLimitedMemes(commands.Cog):
     """ Fun commands that make Porygon2 the amazing piece of cancer it is :^) """
 
     def __init__(self, bot: Bot) -> None:
@@ -30,6 +30,11 @@ class RateLimitedMemes:
         # Init meme objects on load of cog
 
     # Simple commands
+
+    @staticmethod
+    async def _get_last_message(ctx):
+        async for msg in ctx.message.channel.history(limit=1, before=ctx.message):
+            return msg.content
 
     @commands.command()
     async def hello(self, ctx: Context) -> None:
@@ -188,13 +193,24 @@ class RateLimitedMemes:
                 # if we get a url input
                 giz_output = await gizoogle.Website.translate(text)
             else:
+                if text == "^":
+                    text = self._get_last_message(ctx)
                 giz_output = await gizoogle.String.translate(text)
             await ctx.send(giz_output)
 
     @commands.command()
     async def fhyr(self, ctx: Context, *, text: str) -> None:
         MemeCommand.check_rate_limit(ctx)
+        if text == "^":
+            text = self._get_last_message(ctx)
         await ctx.send(utils.generate_fhyr_text(text))
+
+    @commands.command()
+    async def owoify(self, ctx: Context, *, text: str) -> None:
+        MemeCommand.check_rate_limit(ctx)
+        if text == "^":
+            text = self._get_last_message(ctx)
+        await ctx.send(utils.owo(text))
 
     @checks.not_in_oaks_lab()
     @commands.command()
@@ -203,6 +219,11 @@ class RateLimitedMemes:
             file_list = glob('tingle/*.*')
             image_chosen = choice(file_list)
             await ctx.send(file=File(image_chosen))
+
+    @commands.command()
+    async def gone(self, ctx: Context):
+        if MemeCommand.check_rate_limit(ctx):
+            await ctx.send("https://www.youtube.com/watch?v=FORNmPjsapc")
 
 
 def setup(bot: Bot) -> None:

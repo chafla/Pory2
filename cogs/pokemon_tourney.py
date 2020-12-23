@@ -47,7 +47,7 @@ Thank you for participating in the event, and enjoy your permanent medallion in 
 You can view your badge case by using `!league badge_case`."""
 
 
-class PokemonTourney:
+class PokemonTourney(commands.Cog):
 
     # Emoji name for each badge.
     _badges = {
@@ -760,6 +760,7 @@ class PokemonTourney:
     async def update_db(self, ctx):
         self._update_db()
 
+    @commands.Cog.listener()
     async def on_timer_update(self, secs):
         if secs % 60 == 0:
             chan = self.bot.get_channel(325764029538762763)
@@ -770,7 +771,7 @@ class PokemonTourney:
                 self.config.set("config:pkmn_tourney:gym_message_id", new_msg.id)
             else:
                 try:
-                    msg = await chan.get_message(int(gym_msg_id))
+                    msg = await chan.fetch_message(int(gym_msg_id))
                 except AttributeError:  # Usually pops up during debugging as chan is None
                     return
 

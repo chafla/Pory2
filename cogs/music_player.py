@@ -10,15 +10,16 @@ from cogs.utils.audio.playlist import Playlist
 log = logging.getLogger()
 
 
-class MusicPlayer:
+class MusicPlayer(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
         self.active_playlists = {}
         self.saved_songs = config.Config("saved_songs.json")
 
-    async def kill_voice_connections(self):
-        for voice_obj in self.bot.voice_clients:
+    @staticmethod
+    async def kill_voice_connections(bot):
+        for voice_obj in bot.voice_clients:
             await voice_obj.disconnect()
 
     def get_playlist(self, ctx) -> Playlist:
@@ -26,7 +27,7 @@ class MusicPlayer:
         return self.active_playlists.get(ctx.message.guild.id)
 
     @commands.group(aliases=["sc"])
-    async def mp(self):
+    async def mp(self, ctx):
         pass
 
     @mp.command(aliases=["init", "bind"])
@@ -175,3 +176,14 @@ class MusicPlayer:
 
 def setup(bot):
     bot.add_cog(MusicPlayer(bot))
+
+
+def unload(bot):
+    """
+    Just here as a failsafe
+    """
+    if bot.voice_clients:
+        n = len(bot.voice_clients)
+        bot.loop.create_task(MusicPlayer.kill_voice_connections(bot))
+        log.info("Terminated {} voice connection(s) on bot reload.".format(n))
+

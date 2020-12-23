@@ -12,7 +12,7 @@ from .utils import checks
 from cogs.utils import rate_limits
 
 
-class Uwuconomy:
+class Uwuconomy(commands.Cog):
 
     # active_guilds = [274731851661443074, 155800402514673664]
 
@@ -24,6 +24,7 @@ class Uwuconomy:
         self.active_guilds = list(self.config.smembers("config:uwuconomy:active_guilds"))
         self.active_channels = list(self.config.smembers("config:uwuconomy:active_chans"))
         self.muted_contexts = list(self.config.smembers("config:uwuconomy:muted"))
+        self.reply_contexts = list(self.config.smembers("config:uwuconomy:replies"))
 
     @property
     def emoji(self) -> Emoji:
@@ -97,6 +98,25 @@ class Uwuconomy:
         await ctx.send("uwuconomy reactions {} in {}.".format(action, target.name))
 
     @checks.sudo()
+    @commands.command()
+    async def toggle_uwuconomy_replies(self, ctx: Context, bounds: str = None) -> None:
+
+        name = "config:uwuconomy:replies"
+
+        target = ctx.message.channel if bounds not in ["serverwide", "server"] else ctx.message.guild
+
+        if self.config.sismember(name, target.id):
+            self.config.srem(name, target.id)
+            action = "disabled"
+            self.reply_contexts.remove(str(target.id))
+        else:
+            self.config.sadd(name, target.id)
+            action = "enabled"
+            self.reply_contexts.append(str(target.id))
+
+        await ctx.send("uwuconomy replies {} in {}.".format(action, target.name))
+
+    @checks.sudo()
     @commands.command(hidden=True, enabled=False)
     async def uwu_deflation(self, ctx: Context):
         """Retroactively collect uwus from the called channel and add them to the uwuconomy"""
@@ -118,6 +138,7 @@ class Uwuconomy:
 
         await ctx.send("Complete")
 
+    @commands.Cog.listener()
     async def on_message(self, message: Message) -> None:
         if not isinstance(message.channel, DMChannel) and \
             (
@@ -131,6 +152,12 @@ class Uwuconomy:
                     str(message.guild.id) in self.muted_contexts
             ):
                 await message.add_reaction(self.emoji)
+            elif (
+                    str(message.channel.id) in self.reply_contexts and
+                    message.author.id != self.bot.user.id and
+                    not message.author.bot
+            ):
+                await message.channel.send("uwu")
 
             self.config.incr("user:{}:uwuconomy".format(message.author.id))
             self.config.sadd("config:uwuconomy:tracked_users", message.author.id)

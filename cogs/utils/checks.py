@@ -1,5 +1,5 @@
 
-from typing import Callable
+from typing import Callable, Union
 
 import discord.utils
 
@@ -39,19 +39,25 @@ def pm_check(channel: Guild) -> bool:
     return isinstance(channel, discord.DMChannel)
 
 
-def has_role(ctx: Context, check: Callable[[Role], bool]) -> bool:
+def has_role(ctx: Union[Context, discord.Message], check: Callable[[Role], bool]) -> bool:
     """
     Check if someone has a role,
     :param ctx:
     :param check: Prepped find() argument
     :return: Whether or not the role was found
     """
-    message = ctx.message
+    try:
+        message = ctx.message
+        ch = ctx.message.channel
+        author = ctx.message.author
+    except AttributeError:
+        message = ctx
+        ch = message.channel
+        author = message.author
+
     if sudo_check(message):
         return True
 
-    ch = ctx.message.channel
-    author = ctx.message.author
     if isinstance(ch, discord.DMChannel):
         return False  # can't have roles in PMs
 
@@ -154,13 +160,15 @@ def r_md() -> T_Check:
 
 def not_pmdnd() -> T_Check:
     def predicate(ctx: Context) -> bool:
-        return ctx.message.guild is not None and ctx.message.guild.id != 239125949122215952
+        return (isinstance(ctx.message.channel, discord.DMChannel) or
+                (ctx.message.guild is not None and ctx.message.guild.id != 239125949122215952))
     return commands.check(predicate)
 
 
 def not_rmd() -> T_Check:
     def predicate(ctx: Context) -> bool:
-        return ctx.message.guild is not None and ctx.message.guild.id != 117485575237402630
+        return (isinstance(ctx.message.channel, discord.DMChannel) or
+                (ctx.message.guild is not None and ctx.message.guild.id != 117485575237402630))
     return commands.check(predicate)
 
 
@@ -172,5 +180,11 @@ def leader_for_a_year() -> T_Check:
 
 def in_cj() -> T_Check:
     def predicate(ctx):
-        return ctx.message.guild is not None and ctx.message.guild.id == 283101596806676481
+        return ctx.message.guild is not None and ctx.message.guild.id in [283101596806676481, 344285545742204940]
+    return commands.check(predicate)
+
+
+def in_mez_server() -> T_Check:
+    def predicate(ctx):
+        return ctx.message.guild is not None and ctx.message.guild.id == 344285545742204940
     return commands.check(predicate)

@@ -37,7 +37,7 @@ from .utils import checks
 from .mod import DurationTimeStamp
 
 
-class PMs:
+class PMs(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
@@ -89,7 +89,7 @@ class PMs:
 
     def _get_role_id_from_title(self, guild: Guild, role_title: str) -> Optional[int]:
         try:
-            return self.config.hget("guild:{}:roles:all:names".format(int(guild.id)), role_title.lower())
+            return self.config.hget("guild:{}:roles:all:names".format(guild.id), role_title.lower())
         except RedisError:
             return None
 
@@ -99,9 +99,8 @@ class PMs:
         return dt.strftime(fmt)
 
     @staticmethod
-    async def add_role_from_member(role_id, member_id, guild):
+    async def add_role_from_member(role_id, member: discord.Member, guild):
         role = discord.utils.get(guild.roles, id=role_id)
-        member = discord.utils.get(guild.members, id=member_id)
         if role not in member.roles:
             await member.add_roles(role)
             return True
@@ -131,7 +130,7 @@ class PMs:
 
         prereq_roles = self.get_role_prereqs(guild, role_title)
 
-        member = guild.get_member(ctx.message.author.id)
+        member = await guild.fetch_member(ctx.message.author.id)
 
         # Check to see if the author has all of the prereq roles
         required_roles = [i for i in member.roles]
@@ -166,10 +165,16 @@ class PMs:
                 else:
                     self.config.hdel("guild:{}:roles:roles:{}:bans".format(guild.id, role_title), ctx.message.author.id)
 
-        role_id = int(self._get_role_id_from_title(guild, role_title))
+        role_id = self._get_role_id_from_title(guild, role_title)
+
+        if role_id is None:
+            await ctx.send("Role could not be found.")
+            return
+        else:
+            role_id = int(role_id)
 
         try:
-            if await self.add_role_from_member(role_id, ctx.message.author.id, guild):
+            if await self.add_role_from_member(role_id, member, guild):
                 await ctx.send("Successfully added role.")
             else:
                 await ctx.send("You already have this role.")
@@ -255,7 +260,7 @@ class PMs:
                 await ctx.send("Couldn't find the guild provided.")
                 return
 
-        role_key = "guild:{}:roles:roles:{}".format(guild_id, role_title.lower())
+        role_key = "guild:{}:roles:roles:{}:role_id".format(guild_id, role_title.lower())
         if self.config.exists(role_key):
             self.config.remove(role_key)
             self.config.hdel("guild:{}:roles:all:names".format(guild_id), role_title)
@@ -275,13 +280,13 @@ class PMs:
         # Unfortunately, this can only go so far as to check the verification level and apply
         # a timer. It can't check if the user has a verified email address or phone number.
 
-        member = guild.get_member(user.id)
+        member = await guild.fetch_member(user.id)
 
         if not member:
             return False
-        elif member.status in [discord.Status.offline, discord.Status.invisible]:
-            # We can't really do anything if they're offline.
-            return False
+        # elif member.status in [discord.Status.offline, discord.Status.invisible]:
+        #     # We can't really do anything if they're offline.
+        #     return False
 
         if member.guild.verification_level == discord.VerificationLevel.low:
             return True
@@ -295,11 +300,12 @@ class PMs:
 
     @commands.command()
     async def set(self, ctx, *, role_title: str):
-        """Self-assign a certain role.
-        Roles are mature, anime, subnews, and politics (requires reg).
+        """
+        Self-assign a certain role.
         """
 
         role_name = role_title.lower()
+        role_name.strip('"\'')  # Remove any wrapping quotes
         if isinstance(ctx.message.channel, discord.DMChannel):
             guild = await self.get_server_from_pm(ctx)
 
@@ -342,10 +348,12 @@ class PMs:
         # Get the servers shared between the author and the bot
 
         def message_check(msg):
+            if msg.author.id == self.bot.user.id:
+                return False
             try:
                 int(msg.content)  # Just try to check if it's castable
                 return msg.author.id == ctx.message.author.id
-            except ValueError:
+            except (ValueError, TypeError):
                 # allow for an exit
                 return msg.content.lower() == 'exit'
 

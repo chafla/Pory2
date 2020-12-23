@@ -11,6 +11,7 @@ from typing import List, Optional
 
 import discord
 from discord import Guild
+from discord.ext import commands
 from discord.ext.commands import Bot
 
 from .utils.utils import get_timestamp
@@ -25,7 +26,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 log = logging.getLogger()
 
 
-class BanAppeals:
+class BanAppeals(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -102,6 +103,7 @@ class BanAppeals:
 
         return updated_appeals
 
+    @commands.Cog.listener()
     async def on_timer_update(self, seconds: int) -> None:
         if seconds % 120 == 0 and seconds != 0:  # Check every two minutes
 

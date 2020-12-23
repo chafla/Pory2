@@ -1,4 +1,3 @@
-
 import aiohttp
 import random
 import re
@@ -96,7 +95,8 @@ def format_list(items: List[str]) -> str:  # TODO: ", ".join([items])
     return output
 
 
-async def download_image(url: str, file_path: Union[bytes, str, BytesIO]) -> None:
+async def download_image(url: str, file_path: Union[bytes, str, BytesIO]):
+    # TODO Add an argument for maximum file size
     is_bytes = False
     if isinstance(file_path, str):
         fd = open(file_path, "wb")
@@ -146,8 +146,8 @@ class UserType:
 class Paginator:
 
     def __init__(
-            self, page_limit: int=1000, trunc_limit: int=2000,
-            headers=None, header_extender: str=u'\u200b'
+            self, page_limit: int = 1000, trunc_limit: int = 2000,
+            headers=None, header_extender: str = u'\u200b'
     ) -> None:
         self.page_limit = page_limit
         self.trunc_limit = trunc_limit
@@ -165,20 +165,20 @@ class Paginator:
         else:
             return self.pages
 
-    def set_headers(self, headers: str=None):
+    def set_headers(self, headers: str = None):
         self._headers = headers
 
-    def set_header_extender(self, header_extender: str=u'\u200b') -> None:
+    def set_header_extender(self, header_extender: str = u'\u200b') -> None:
         self._header_extender = header_extender
 
     def _extend_headers(self, length: int) -> None:
         while len(self._headers) < length:
             self._headers.append(u'\u200b')
 
-    def set_trunc_limit(self, limit: int=2000) -> None:
+    def set_trunc_limit(self, limit: int = 2000) -> None:
         self.trunc_limit = limit
 
-    def set_page_limit(self, limit: int=1000) -> None:
+    def set_page_limit(self, limit: int = 1000) -> None:
         self.page_limit = limit
 
     def paginate(self, value: str) -> Union[List[str], List[Tuple[str, str]]]:
@@ -320,7 +320,7 @@ def generate_fhyr_text(string: str) -> str:
 
     for match in re.finditer("(\w)[.!?\n](\B)", string):
         # determine the string that will follow
-        following_str = "{}\~ {}{}".format(match.group(1),
+        following_str = "{}\\~ {}{}".format(match.group(1),
                                            random.choice(emoji),
                                            match.group(2))
         # This grabs a chunk of the string before it along with the replace,
@@ -331,7 +331,7 @@ def generate_fhyr_text(string: str) -> str:
     for match in re.finditer("\w(\b)", string):
         if random.random() > 0.75:  # is 5% too high?
             string = string.replace(match.group(0), "'l{}{}{}".format("u" * random.randint(1, 10),
-                                                                      "\~" * random.randint(1, 4),
+                                                                      "\\~" * random.randint(1, 4),
                                                                       match.group(1)), 1)
 
     for i in range(len(string)):
@@ -346,7 +346,7 @@ def generate_fhyr_text(string: str) -> str:
 
             elif 0.90 > rand > 0.85:
                 updated_string = re.sub(match.group(1), "'l{}{}{}".format("u" * random.randint(1, 10),
-                                                                          "\~" * random.randint(1, 4),
+                                                                          "\\~" * random.randint(1, 4),
                                                                           match.group(1)), cur_string, count=1)
 
             elif rand > 0.90:
@@ -359,7 +359,7 @@ def generate_fhyr_text(string: str) -> str:
 
             string = string.replace(cur_string, updated_string)  # huh
 
-    mini_luc = "({0}) {1}{2}{3}{4}{5}){6}) \~"  # yuck
+    mini_luc = "({0}) {1}{2}{3}{4}{5}){6}) \\~"  # yuck
     mini_luc += "".join([random.choice(emoji) for _ in range(random.randint(4, 15))])
 
     blushes = random.randint(1, 2)
@@ -378,3 +378,66 @@ def generate_fhyr_text(string: str) -> str:
     string += "\n" + mini_luc
 
     return string
+
+
+def owo(input_str: str) -> str:
+    """
+    owoify a stwing. fuww cwedit to https://github.com/zuzak/owo/ fow the idea.
+    """
+
+    output = input_str
+    prefixes = [
+        '<3 ',
+        'H-hewwo?? ',
+        'HIIII! ',
+        'Haiiii! ',
+        'Huohhhh. ',
+        'OWO ',
+        'OwO ',
+        'UwU '
+    ]
+
+    suffixes = [
+        ' :3',
+        ' UwU',
+        ' ʕʘ‿ʘʔ',
+        ' >_>',
+        ' ^_^',
+        '..',
+        ' Huoh.',
+        ' ^-^',
+        ' ;_;',
+        ' ;-;',
+        ' xD',
+        ' x3',
+        ' :D',
+        ' :P',
+        ' ;3',
+        ' XDDD',
+        ', fwendo',
+        ' ㅇㅅㅇ',
+        ' (人◕ω◕)',
+        '（＾ｖ＾）',
+        ' Sigh.',
+        ' ._.',
+        ' (• o •)',
+        ' >_<'
+    ]
+
+    substitutions = {
+        'r': 'w',
+        'l': 'w',
+        'R': 'W',
+        'L': 'W',
+        'no': 'nu',
+        'has': 'haz',
+        'have': 'haz',
+        'you': 'uu',
+        'the ': 'da ',
+        'The ': 'Da '
+    }
+
+    for old, sub in substitutions.items():
+        output = output.replace(old, sub)
+
+    return random.choice(prefixes) + output + random.choice(suffixes)

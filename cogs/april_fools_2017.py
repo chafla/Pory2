@@ -37,7 +37,7 @@ def is_fake_mod():
     return commands.check(predicate)
 
 
-class AprilFools:
+class AprilFools(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
@@ -101,6 +101,7 @@ class AprilFools:
             await self.bot.add_roles(mention, self.banned_role)
             await mention.send("You've just been sent to the Shadow Realm by {}".format(author.display_name))
 
+    @commands.Cog.listener()
     async def on_timer_update(self, secs):
         if secs % 5 == 0:
             for user_id, data in self.ban_data.items():

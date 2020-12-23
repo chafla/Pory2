@@ -20,7 +20,7 @@ class FriendCodeValidator:
             self.code = None
 
 
-class FriendCodes:
+class FriendCodes(commands.Cog):
 
     """Cog for 3DS/Switch friend code management."""
 
@@ -55,7 +55,7 @@ class FriendCodes:
             return "{0}-{1}-{2}".format(fc_parts[0], fc_parts[1], fc_parts[2])
 
     @commands.group()
-    async def fc(self) -> None:
+    async def fc(self, ctx) -> None:
         """Set your FCs or find another user's FC
 
         `[p]fc get @user` to look up an FC
@@ -82,7 +82,7 @@ class FriendCodes:
         await ctx.send("Friend code updated successfully.")
 
     @fc.command()
-    async def get(self, ctx: Context, *, mention: Member=None) -> None:
+    async def get(self, ctx, *, mention: Member=None) -> None:
         """Get a user's friend code. If a mention is omitted, then it gets the users' own friend code."""
 
         member = ctx.message.author if mention is None else mention
@@ -109,15 +109,16 @@ class FriendCodes:
                                                                                  sys_name)).items():
                     igns += "{}: {}\n".format(game.title(), name)
 
+
                 if igns:
                     embed.add_field(name="IGNs", value=igns)
 
             await ctx.send(embed=embed)
 
-    @get.error
-    async def fc_error(self, error: Exception, ctx: Context) -> None:
-        if isinstance(error, commands.BadArgument):
-            await ctx.send(str(error))
+    # @get.error
+    # async def fc_error(self, error: Exception, ctx: Context) -> None:
+    #     if isinstance(error, commands.BadArgument):
+    #         await ctx.send(str(error))
 
     @fc.command()
     async def set_ign(self, ctx: Context, game: str, *, in_game_name: str) -> None:

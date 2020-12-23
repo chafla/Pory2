@@ -30,7 +30,7 @@ class MarkovifyTextList(markovify.Text):
 log = logging.getLogger()
 
 
-class Markov:
+class Markov(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
