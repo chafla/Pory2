@@ -101,6 +101,9 @@ class TimeZones(commands.Cog):
 
     @commands.group()
     async def tz(self, ctx: Context):
+        """
+        Timezone management. Call !help tz for more info.
+        """
         pass
 
     @tz.command()

@@ -27,7 +27,8 @@ from discord import Message
 from discord.ext.commands import (
     Context, CommandError, NoPrivateMessage, DisabledCommand,
     CheckFailure, CommandNotFound, MissingRequiredArgument,
-    CommandInvokeError, UserInputError, BadArgument, AutoShardedBot
+    CommandInvokeError, UserInputError, BadArgument, AutoShardedBot,
+    DefaultHelpCommand
 )
 
 from cogs.utils.errors import CommandBlacklisted, CommandRateLimited
@@ -122,10 +123,13 @@ class PoryBot(AutoShardedBot):
         self.config = RedisConfig()
         self.loop.create_task(init_timed_events(self))
 
+
 intents = discord.Intents.all()
 
-bot = PoryBot(command_prefix=prefix, description=description, dm_help=True,
-              fetch_offline_members=True, intents=intents)
+help_cmd = DefaultHelpCommand(width=100, dm_help=None, dm_help_threshold=500)
+
+bot = PoryBot(command_prefix=prefix, description=description, help_command=help_cmd,
+              fetch_offline_members=True, intents=intents, owner_id=78716152653553664)
 
 
 def log_exception(error: Exception, ctx: Context) -> None:

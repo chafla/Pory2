@@ -26,14 +26,33 @@ from .utils import checks, rate_limits, utils
 
 log = logging.getLogger()
 
+pory_emoji_names = {
+    "idle": [
+        "idle_fwd", "idle_l", "idle_r", "pory_zzz", "idle_bkwd", "pory_atk"
+    ],
+    "error": "pory_ded"
+}
+
+pory_emoji_guild_id = 765796140842876949
+
 
 class Admin(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.config = bot.config
+        self._last_referenced_cog = None
+        self._emoji_pool = None
 
         self.bot.loop.create_task(self.send_message_on_restart())
+        self.bot.loop.create_task(self.set_status())
+
+        # self.bot.loop.create_task(self.load_emoji())
+
+    # async def load_emoji(self):
+    #     await self.bot.wait_until_ready()
+    #     guild = await self.bot.fetch_guild(pory_emoji_guild_id)
+    #     self._emoji_pool = guild.emojis
 
     async def send_message_on_restart(self) -> None:
         await self.bot.wait_until_ready()
@@ -45,6 +64,10 @@ class Admin(commands.Cog):
                 await channel.send("Restarted in {}s.".format(int(time() - int(float(force_kill_info["timestamp"])))))
                 self.config.delete(hash_name)
 
+    async def set_status(self):
+        await self.bot.wait_until_ready()
+        await self.bot.change_presence(activity=Game(name="!help"))
+
     async def git_pull(
             self, channel: Union[DMChannel, TextChannel]
     ) -> None:
@@ -54,7 +77,7 @@ class Admin(commands.Cog):
 
         # If it's a crucial part, then just kill pory
         if "cogs/utils" in result.stdout or "main_3" in result.stdout:
-            await channel.send("Restarting")
+            await channel.send("Non-cog file updated, restarting")
             await self.bot.logout()
         elif "up-to-date" in result.stdout:
             pass
@@ -94,11 +117,13 @@ class Admin(commands.Cog):
     @checks.sudo()
     @commands.command()
     async def load(
-            self, ctx: Context, *, module: str, verbose: bool=False
+            self, ctx: Context, *, module: str, verbose: bool = False
     ) -> None:
         """load a module"""
         t = monotonic()
         try:
+            if module == "^" and self._last_referenced_cog is not None:
+                module = self._last_referenced_cog
             self.bot.load_extension(module)
         except Exception as e:
             if not verbose:
@@ -113,18 +138,23 @@ class Admin(commands.Cog):
     async def unload(self, ctx: Context, *, module: str) -> None:
         """Unloads a module."""
         try:
+            if module == "^" and self._last_referenced_cog is not None:
+                module = self._last_referenced_cog
             self.bot.unload_extension(module)
         except Exception as e:
             await ctx.send('{}: {}'.format(type(e).__name__, e))
         else:
+            self._last_referenced_cog = module
             await ctx.send('Module unloaded successfully.')
 
     @checks.sudo()
-    @commands.command(name='reload')
+    @commands.command(name='reload', aliases=["rl"])
     async def _reload(self, ctx: Context, *, module: str) -> None:
         """Reloads a module."""
         t = monotonic()
         try:
+            if module == "^" and self._last_referenced_cog is not None:
+                module = self._last_referenced_cog
             self.bot.unload_extension(module)
             self.bot.load_extension(module)
         except Exception as e:
@@ -133,6 +163,7 @@ class Admin(commands.Cog):
             log.exception("Exception occurred when reloading cog")
             monotonic()  # Resetting it
         else:
+            self._last_referenced_cog = module
             await ctx.send("Module loaded successfully.\nTotal time: `{:.0f}ms`.".format((monotonic() - t) * 1000))
 
     # Thanks to rapptz
@@ -234,7 +265,7 @@ class Admin(commands.Cog):
 
     @checks.sudo()
     @commands.command(aliases=["rip", "F", "f"])
-    async def kill(self, ctx: Context, *, args: str=None) -> None:
+    async def kill(self, ctx: Context, *, args: str = None) -> None:
         if args == "pull":
             # Git pull.
             result = subprocess.run(["git", "--no-pager", "pull"], universal_newlines=True, cwd=getcwd(),
@@ -253,7 +284,7 @@ class Admin(commands.Cog):
     @checks.sudo()
     @commands.command(aliases=["auto_pull"])
     async def set_auto_git_update(
-            self, ctx: Context, webhook_author_id: str=None
+            self, ctx: Context, webhook_author_id: str = None
     ) -> None:
         """Toggle automatic git-update in the current channel
         Looks for a certain webhook's ID
@@ -293,7 +324,7 @@ class Admin(commands.Cog):
     @checks.sudo()
     @commands.command(name="unblacklist_memes")
     async def unblacklist_memes_from_channel(
-            self, ctx: Context, channel_id: str=None
+            self, ctx: Context, channel_id: str = None
     ) -> None:
         if channel_id is None:
             channel_id = ctx.message.channel.id
@@ -314,9 +345,9 @@ class Admin(commands.Cog):
         await ctx.send(output)
 
     @checks.sudo()
-    @commands.command(alises=["cd_coeff"])
+    @commands.command(alises=["set_cooldown_coeff", "cooldown_multiplier"])
     async def set_cooldown_coeff(
-            self, ctx: Context, ratio: float=1.0
+            self, ctx: Context, ratio: float = 1.0
     ) -> None:
         """Adjust cooldown settings for current channel"""
         self.config.set("chan:{}:rate_limits:cooldown_ratio".format(ctx.channel.id), ratio)
@@ -340,16 +371,16 @@ class Admin(commands.Cog):
 
     @checks.sudo()
     @commands.command()
-    async def set_game(self, ctx: Context, *, game: str=None) -> None:
+    async def set_game(self, ctx: Context, *, game: str = None) -> None:
         if game:
-            await self.bot.change_presence(game=Game(name=game))
+            await self.bot.change_presence(activity=Game(name=game))
         else:
-            await self.bot.change_presence(game=None)
+            await self.bot.change_presence(activity=None)
         await ctx.send("```\nGame set to {}.```".format(game))
 
     @checks.sudo()
     @commands.command()
-    async def get_config(self, ctx: Context, target: str="channel") -> None:
+    async def get_config(self, ctx: Context, target: str = "channel") -> None:
         """Get config from a channel or guild based"""
         if target in ["server", "guild"]:
             target_id = ctx.message.guild.id
@@ -377,6 +408,20 @@ class Admin(commands.Cog):
             await ctx.send("No config information found for this context.")
         else:
             await ctx.send(embed=embed)
+
+    # @commands.Cog.listener()
+    # async def on_timer_update(self, seconds: int) -> None:
+        # Every 10 minutes, update pory's status icon
+        # ...or it would, if the docs were updated to mention that this doesn't actually work.
+        # if seconds % 5 == 0 and self._emoji_pool is not None:
+        #     emoji_choice = random.choice(pory_emoji_names["idle"])
+        #     emoji_obj_selected = discord.utils.get(self._emoji_pool, name=emoji_choice)
+        #     emoji_dict = {
+        #         "id": emoji_obj_selected.id,
+        #         "name": emoji_obj_selected.name
+        #     }
+        #     activity = discord.CustomActivity(None, emoji=emoji_dict)
+        #     await self.bot.change_presence(activity=activity)
 
     @commands.Cog.listener()
     async def on_message(self, message: Message) -> None:

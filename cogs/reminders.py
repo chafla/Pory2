@@ -98,6 +98,17 @@ class Reminder:
 
         # Now let's find the actual message inside
 
+    def __gt__(self, other):
+        if isinstance(other, Reminder):
+            return self.timedelta > other.timedelta
+        return NotImplemented
+
+    def __lt__(self, other):
+        if isinstance(other, Reminder):
+            return self.timedelta < other.timedelta
+        return NotImplemented
+
+
     @classmethod
     def from_unix_timestamp(cls, timestamp: str, message: str):
         """
@@ -398,6 +409,11 @@ class Reminders(commands.Cog):
             self.config.sadd(self.ACTIVE_KEY, reminder_tag)
 
     def _delete_from_db(self, tag: str):
+        """
+        Delete a reminder from the database. Purges it from the soon and active queues, as well as the user's key.
+
+        :param tag: reminder tag in UUID form.
+        """
         tracked_objs_key = "config:reminders:objects"
         obj_key = "{}:{}".format(tracked_objs_key, tag)
 
@@ -489,8 +505,47 @@ class Reminders(commands.Cog):
             finally:
                 self._delete_from_db(event_obj["tag"])
 
-    @commands.group(invoke_without_command=True, aliases=["remindme"])
+    def _get_user_reminders(self, ctx) -> List[Tuple[Reminder, dict]]:
+        """
+        Get a formatted list of reminders for a user, sorted by expiration.
+        """
+        user_id = ctx.author.id
+        user_key = "user:{}:reminders:active".format(user_id)
+
+        if not self.config.exists(user_key):
+            return []
+
+        rems = []
+
+        # Build rems as a tuple of (reminder object, database object)
+
+        for tag in self.config.smembers(user_key):
+            obj_key = "config:reminders:objects:{}".format(tag)
+            db_obj = self.config.hgetall(obj_key)
+            rem_obj = Reminder.from_unix_timestamp(db_obj["exp_time"], db_obj["message"])
+            rems.append((rem_obj, db_obj))
+
+        new_rems = list(sorted(rems, key=lambda r: r[0].exp_time))
+
+        return new_rems
+
+    def list_reminders(self, ctx) -> List[str]:
+
+        user_rems = self._get_user_reminders(ctx)
+        output = []
+
+        for reminder_obj, database_obj in user_rems:
+            output.append("<#{}>: **{}** in {}".format(database_obj["channel_id"],
+                                                       reminder_obj.message,
+                                                       reminder_obj.human_readable_time()))
+
+        return output
+
+    @commands.group(invoke_without_command=True, aliases=["remindme", "rm"])
     async def reminder(self, ctx, *, reminder: Reminder):
+        """
+        Functionality for reminders. Call !help reminder for associated commands.
+        """
         # Do some database stuff here
 
         message = "I'll remind you to '{}' in {}.".format(reminder.reminder_body,
@@ -499,33 +554,18 @@ class Reminders(commands.Cog):
         self._add_reminder_to_db(ctx, reminder)
         await ctx.send(message)
 
-    @reminder.command()
+    @reminder.command(aliases=["ls"])
     async def list(self, ctx):
         """
         List a user's reminders
         """
 
-        user_id = ctx.author.id
-        user_key = "user:{}:reminders:active".format(user_id)
+        reminder_msg = "\n".join(self.list_reminders(ctx))
 
-        if not self.config.exists(user_key):
-            await ctx.send("You have no active reminders.")
-            return
+        if not reminder_msg:
+            reminder_msg = "You don't have any active reminders."
 
-        rems = []
-
-        rem_fmt = "<#{}>: **{}** in {}"
-
-        for tag in self.config.smembers(user_key):
-            obj_key = "config:reminders:objects:{}".format(tag)
-            obj = self.config.hgetall(obj_key)
-            rem_obj = Reminder.from_unix_timestamp(obj["exp_time"], obj["message"])
-            rems.append((int(obj["exp_time"]),
-                         rem_fmt.format(obj["channel_id"], rem_obj.reminder_body, rem_obj.human_readable_time())))
-
-        new_rems = list(sorted(rems, key=lambda r: rems[0]))
-
-        await ctx.send("\n".join((str(i[1]) for i in new_rems)))
+        await ctx.send(reminder_msg)
 
     @checks.sudo()
     @reminder.command()
@@ -541,22 +581,66 @@ class Reminders(commands.Cog):
 
         await ctx.send("Your reminders have been deleted.")
 
-    @reminder.command(enabled=False)
-    async def delete(self, ctx, *, message_text: str):
+    @checks.sudo()
+    @reminder.command()
+    async def delete(self, ctx):
         """
         Delete a reminder.
-        Should show an interactive prompt to allow the user to delete one that they want to.
+        Should show an interactive prompt to allow the user to delete one that they want to. Since users may have
+        multiple duplicate reminders, make sure we delete the one we want to.
         """
 
-        # response_msg = await self.bot.wait_for("message", check=message_check, timeout=600)
-        #
-        # if response_msg is None:
-        #     return None
-        #
-        # elif response_msg.content == 'exit':
-        #     return None
-        #
-        # selection = int(response_msg.content)
+        def message_check(msg):
+            return msg.author == ctx.message.author and msg.channel == ctx.channel
+
+        base_msg = "Please reply with the number of the reminder you want to delete, or `exit` to quit."
+        invalid_resp_msg = "Invalid response, please reply with the number of the reminder to delete, or `exit`."
+
+        reminders = self._get_user_reminders(ctx)
+
+        if not reminders:
+            await ctx.send("You don't have any active reminders.")
+            return
+
+        selected_reminder = None
+
+        output = [base_msg]
+
+        for i, tup in enumerate(reminders, start=1):
+            output.append("`{}`: **{}** in {}".format(i, tup[0].message, tup[0].human_readable_time()))
+
+        base_msg_content = "\n".join(output)
+
+        own_msg = await ctx.send(base_msg_content)
+
+        while selected_reminder is None:
+
+            response_msg = await self.bot.wait_for("message", check=message_check, timeout=600)
+
+            if response_msg is None or response_msg.content == "exit":
+                return
+
+            try:
+                selection = int(response_msg.content)
+            except ValueError:
+                await own_msg.edit(content=base_msg_content + "\n\n" + invalid_resp_msg)
+                continue
+
+            if not 0 < selection <= len(reminders):
+                await own_msg.edit(content=base_msg_content + "\n\n" + "Number appears to be out of range.")
+
+            else:
+                selected_reminder = reminders[selection - 1]
+
+        rem_obj, db_dict = selected_reminder
+
+        tag = db_dict["tag"]
+
+        log.info("Deleting reminder with tag {}".format(tag))
+
+        self._delete_from_db(tag)
+
+        await own_msg.edit(content="Reminder to '{}' deleted successfully.".format(rem_obj.message))
 
     @commands.Cog.listener()
     async def on_timer_update(self, seconds: int) -> None:
