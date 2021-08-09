@@ -2,6 +2,7 @@ import aiohttp
 import random
 import re
 import time
+import datetime
 
 from io import StringIO, BytesIO
 from typing import List, Tuple, Union
@@ -118,6 +119,60 @@ async def download_image(url: str, file_path: Union[bytes, str, BytesIO]):
     finally:
         if not is_bytes:
             fd.close()
+
+
+class FancyTimeStamp:
+    """
+    Fancy timestamp display class that formats a normal timestamp into a fancy discord one.
+    see: https://github.com/discord/discord-api-docs/pull/3135/files
+    """
+
+    @staticmethod
+    def _as_epoch(ts):
+        try:
+            dt = datetime.datetime.fromtimestamp(int(ts))
+        except TypeError:
+            dt = ts
+        return int(dt.timestamp())
+
+    @staticmethod
+    def _format(flag: str, ts: Union[datetime.datetime, int]):
+        return "<t:{}:{}>".format(FancyTimeStamp._as_epoch(ts), flag)
+
+    @staticmethod
+    def full_timestamp_weekday(ts) -> str:
+        """
+        Sunday, 4 July 2021 20:00
+        """
+        return FancyTimeStamp._format("F", ts)
+
+    @staticmethod
+    def date_time(ts) -> str:
+        """
+        4 July 2021 20:00
+        """
+        return FancyTimeStamp._format("f", ts)
+
+    @staticmethod
+    def time_no_secs(ts):
+        """
+        20:00
+        """
+        return FancyTimeStamp._format("t", ts)
+
+    @staticmethod
+    def dd_mm_yyyy(ts) -> str:
+        """
+        07/04/2021
+        """
+        return FancyTimeStamp._format("d", ts)
+
+    @staticmethod
+    def relative(ts) -> str:
+        """
+        In an hour
+        """
+        return FancyTimeStamp._format("R", ts)
 
 
 def embed_from_dict(obj: dict, **embed_args) -> discord.Embed:

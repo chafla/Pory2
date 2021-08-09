@@ -40,6 +40,8 @@ from uuid import uuid4
 import logging
 
 from cogs.utils import checks
+from cogs.utils.utils import FancyTimeStamp
+from dateutil.relativedelta import relativedelta
 
 log = logging.getLogger()
 
@@ -78,18 +80,18 @@ class Reminder:
 
         # Build timedelta
 
-        # Weeks are tricky since we want to factor in years for good measure
-        weeks = (timeframe.get("week", 0) +
-                 (4 * timeframe.get("month", 0)) +
-                 (52 * timeframe.get("year", 0)))
-
-        self.timedelta = datetime.timedelta(
+        rel_delta = relativedelta(
             seconds=timeframe.get("second", 0),
             minutes=timeframe.get("minute", 0),
             hours=timeframe.get("hour", 0),
             days=timeframe.get("day", 0),
-            weeks=weeks if weeks else 0,
+            weeks=timeframe.get("week", 0),
+            months=timeframe.get("month", 0),
+            years=timeframe.get("year", 0)
         )
+
+        rel_time = datetime.datetime.utcnow() + rel_delta
+        self.timedelta = rel_time - datetime.datetime.utcnow()
 
         if self.timedelta.days > (365 * 2):  # max length of 2 years
             raise commands.BadArgument("Length must be less than 2 years.")
@@ -107,7 +109,6 @@ class Reminder:
         if isinstance(other, Reminder):
             return self.timedelta < other.timedelta
         return NotImplemented
-
 
     @classmethod
     def from_unix_timestamp(cls, timestamp: str, message: str):
@@ -183,23 +184,7 @@ class Reminder:
         return datetime.datetime.now() + self.timedelta
 
     def human_readable_time(self) -> str:
-        output_string = []
-
-        fields = [
-            ("year", self.years),
-            ("month", self.months),
-            ("week", self.weeks),
-            ("day", self.days),
-            ("hour", self.hours),
-            ("minute", self.minutes),
-            ("second", self.seconds)
-        ]
-
-        for unit, value in fields:
-            if value:
-                output_string.append("{} {}{}".format(value, unit, "s" if value != 1 else ""))
-
-        return ", ".join(output_string)
+        return FancyTimeStamp.relative(self.exp_time)
 
 
 class ReminderCache:
@@ -338,7 +323,7 @@ class Reminders(commands.Cog):
         """
         Send a discord message with the given reminder object.
         """
-        output_message = "<@{}>, you asked me to remind you to **{}**!"
+        output_message = "<@{}>, you asked me{} to remind you to **{}**!"
         try:
 
             chan_id = int(reminder["channel_id"])
@@ -354,7 +339,12 @@ class Reminders(commands.Cog):
                 log.error("Couldn't find channel for reminder.")
                 return
 
-            await chan.send(output_message.format(reminder["user_id"], reminder["message"]))
+            time_set = reminder.get("created", "")
+
+            if time_set:
+                time_set = " " + FancyTimeStamp.relative(time_set)
+
+            await chan.send(output_message.format(reminder["user_id"], time_set, reminder["message"]))
 
         except Exception:
             log.exception("Exception when trying to send message")
@@ -395,7 +385,8 @@ class Reminders(commands.Cog):
             "user_id": str(ctx.author.id),
             "message": reminder.reminder_body,
             "exp_time": exp_ts,
-            "tag": reminder_tag
+            "tag": reminder_tag,
+            "created": str(int(datetime.datetime.now().timestamp()))
         }
 
         self.config.sadd(user_active_key, reminder_tag)
@@ -535,11 +526,61 @@ class Reminders(commands.Cog):
         output = []
 
         for reminder_obj, database_obj in user_rems:
-            output.append("<#{}>: **{}** in {}".format(database_obj["channel_id"],
-                                                       reminder_obj.message,
-                                                       reminder_obj.human_readable_time()))
+            output.append("<#{}>: **{}** {}".format(database_obj["channel_id"],
+                                                    reminder_obj.message,
+                                                    reminder_obj.human_readable_time()))
 
         return output
+
+    async def _select_reminder(self, ctx):
+        """
+        Gives a user an interactive prompt to select a reminder
+        :return: The reminder object itself
+        """
+
+        def message_check(msg):
+            return msg.author == ctx.message.author and msg.channel == ctx.channel
+
+        base_msg = "Please reply with the number of the reminder you want to select, or `exit` to quit."
+        invalid_resp_msg = "Invalid response, please reply with the number of the reminder to select, or `exit`."
+
+        reminders = self._get_user_reminders(ctx)
+
+        if not reminders:
+            await ctx.send("You don't have any active reminders.")
+            return
+
+        selected_reminder = None
+
+        output = [base_msg]
+
+        for i, tup in enumerate(reminders, start=1):
+            output.append("`{}`: **{}** {}".format(i, tup[0].message, tup[0].human_readable_time()))
+
+        base_msg_content = "\n".join(output)
+
+        own_msg = await ctx.send(base_msg_content)
+
+        while selected_reminder is None:
+
+            response_msg = await self.bot.wait_for("message", check=message_check, timeout=600)
+
+            if response_msg is None or response_msg.content == "exit":
+                return
+
+            try:
+                selection = int(response_msg.content)
+            except ValueError:
+                await own_msg.edit(content=base_msg_content + "\n\n" + invalid_resp_msg)
+                continue
+
+            if not 0 < selection <= len(reminders):
+                await own_msg.edit(content=base_msg_content + "\n\n" + "Number appears to be out of range.")
+
+            else:
+                selected_reminder = reminders[selection - 1]
+
+        return selected_reminder
 
     @commands.group(invoke_without_command=True, aliases=["remindme", "rm"])
     async def reminder(self, ctx, *, reminder: Reminder):
@@ -548,8 +589,8 @@ class Reminders(commands.Cog):
         """
         # Do some database stuff here
 
-        message = "I'll remind you to '{}' in {}.".format(reminder.reminder_body,
-                                                          reminder.human_readable_time())
+        message = "I'll remind you to '{}' {}.".format(reminder.reminder_body,
+                                                       reminder.human_readable_time())
 
         self._add_reminder_to_db(ctx, reminder)
         await ctx.send(message)
@@ -581,7 +622,29 @@ class Reminders(commands.Cog):
 
         await ctx.send("Your reminders have been deleted.")
 
-    @checks.sudo()
+    @reminder.command()
+    async def info(self, ctx):
+        """
+        Get information on a reminder.
+        """
+
+        rem_obj, db_dict = await self._select_reminder(ctx)
+
+        output_msg_embed = discord.Embed(description='Information on your reminder to "*{}*"'.format(db_dict["message"]))
+
+        reminder_exp = int(db_dict["exp_time"])
+        reminder_set = db_dict.get("created")  # may be None since this is a recent addition
+
+        if reminder_set is not None:
+            reminder_msg = FancyTimeStamp.full_timestamp_weekday(reminder_set)
+        else:
+            reminder_msg = "Unknown (prior to starting times being tracked)"
+        output_msg_embed.add_field(name="Time registered", value=reminder_msg)
+        output_msg_embed.add_field(name="Expires", value=FancyTimeStamp.relative(reminder_exp))
+        output_msg_embed.add_field(name="In channel", value="<#{}>".format(db_dict["channel_id"]))
+
+        await ctx.send(embed=output_msg_embed)
+
     @reminder.command()
     async def delete(self, ctx):
         """
@@ -590,49 +653,7 @@ class Reminders(commands.Cog):
         multiple duplicate reminders, make sure we delete the one we want to.
         """
 
-        def message_check(msg):
-            return msg.author == ctx.message.author and msg.channel == ctx.channel
-
-        base_msg = "Please reply with the number of the reminder you want to delete, or `exit` to quit."
-        invalid_resp_msg = "Invalid response, please reply with the number of the reminder to delete, or `exit`."
-
-        reminders = self._get_user_reminders(ctx)
-
-        if not reminders:
-            await ctx.send("You don't have any active reminders.")
-            return
-
-        selected_reminder = None
-
-        output = [base_msg]
-
-        for i, tup in enumerate(reminders, start=1):
-            output.append("`{}`: **{}** in {}".format(i, tup[0].message, tup[0].human_readable_time()))
-
-        base_msg_content = "\n".join(output)
-
-        own_msg = await ctx.send(base_msg_content)
-
-        while selected_reminder is None:
-
-            response_msg = await self.bot.wait_for("message", check=message_check, timeout=600)
-
-            if response_msg is None or response_msg.content == "exit":
-                return
-
-            try:
-                selection = int(response_msg.content)
-            except ValueError:
-                await own_msg.edit(content=base_msg_content + "\n\n" + invalid_resp_msg)
-                continue
-
-            if not 0 < selection <= len(reminders):
-                await own_msg.edit(content=base_msg_content + "\n\n" + "Number appears to be out of range.")
-
-            else:
-                selected_reminder = reminders[selection - 1]
-
-        rem_obj, db_dict = selected_reminder
+        rem_obj, db_dict = self._select_reminder(ctx)
 
         tag = db_dict["tag"]
 
@@ -640,7 +661,7 @@ class Reminders(commands.Cog):
 
         self._delete_from_db(tag)
 
-        await own_msg.edit(content="Reminder to '{}' deleted successfully.".format(rem_obj.message))
+        await ctx.send("Reminder to '{}' deleted successfully.".format(rem_obj.message))
 
     @commands.Cog.listener()
     async def on_timer_update(self, seconds: int) -> None:

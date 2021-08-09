@@ -21,6 +21,7 @@ from discord.ext.commands import Context, Bot
 import discord
 import pytz
 import datetime
+import dateutil.relativedelta
 
 TZ_SET_PROMPT_MSG_INIT = """
 What's the 2-character code for your country? (for example, US for United States).
@@ -98,6 +99,17 @@ class TimeZones(commands.Cog):
         self.config.delete("user:{}:tz:whitelist_guilds".format(user_id))
         self.config.delete("user:{}:tz:timezone".format(user_id))
         self.config.delete("user:{}:tz:privacy_enabled".format(user_id))
+
+    @staticmethod
+    def tz_diff(tz1, tz2):
+        """
+        Returns the difference in hours between timezone2 and timezone 1
+        """
+
+        utcnow = pytz.timezone('utc').localize(datetime.datetime.utcnow())  # generic time
+        here = utcnow.astimezone(tz1).replace(tzinfo=None)
+        there = utcnow.astimezone(tz2).replace(tzinfo=None)
+        return dateutil.relativedelta.relativedelta(here, there).hours
 
     @commands.group()
     async def tz(self, ctx: Context):
@@ -237,6 +249,8 @@ class TimeZones(commands.Cog):
         user_tz_name = self.get_timezone(ctx.author.id)
 
         desc = []
+        user_dt = None
+        user_tz = None
 
         if user_tz_name and not (self.has_privacy_enabled(ctx.author.id) and
                                  not self.is_whitelisted(ctx.author.id, ctx.guild.id)):
@@ -259,7 +273,20 @@ class TimeZones(commands.Cog):
                 new_tz = pytz.timezone(mem_tz)
                 new_dt = datetime.datetime.now(tz=new_tz)
                 # Storing them as a tuple of (display name, tz_info)
-                desc.append("**{}**:\n {}".format(member.display_name, new_dt.strftime(DT_FORMAT)))
+
+                new_desc = "**{}**:\n {}".format(member.display_name, new_dt.strftime(DT_FORMAT))
+
+                # show the difference between the calling user's timezone and the displayed ones, if the
+                # calling user doesn't have privacy enabled
+
+                if user_tz is not None:
+                    time_dif_hrs = self.tz_diff(new_tz, user_tz)
+                    if time_dif_hrs != 0:
+                        new_desc += " ({} hours {})".format(
+                            abs(time_dif_hrs), "ahead" if time_dif_hrs > 0 else "behind"
+                        )
+
+                desc.append(new_desc)
 
         embed = discord.Embed(description="Timezone information:\n\n{}".format("\n".join(desc)))
 
