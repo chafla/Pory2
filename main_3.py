@@ -85,7 +85,8 @@ initial_extensions = [
     'cogs.webhooks',
     'cogs.timezones',
     'cogs.zoomeyes',
-    'cogs.reminders'
+    'cogs.reminders',
+    'cogs.user_notes'
 ]
 
 description = "Memebot written initially for the /r/MysteryDungeon server that has spread elsewhere." \
