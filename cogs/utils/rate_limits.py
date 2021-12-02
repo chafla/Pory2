@@ -76,10 +76,11 @@ class MemeCommand:
         """
         Increase the database counter for the command.
         """
-        if not config.exists("misc:rate_limits:counters"):
-            config.zadd("misc:rate_limits:counters", 1.0, ctx.command.name)
-        else:
-            config.zincrby("misc:rate_limits:counters", ctx.command.name, 1)
+        pass
+        # if not config.exists("misc:rate_limits:counters"):
+        #     config.zadd("misc:rate_limits:counters", 1.0, ctx.command.name)
+        # else:
+        #     config.zincrby("misc:rate_limits:counters", ctx.command.name, 1)
 
     def _handle_rate_limit(
             self, ctx: Context, ignore_blacklist: bool, priority_blacklist: List[int]

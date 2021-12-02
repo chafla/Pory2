@@ -2,11 +2,12 @@
 import asyncio
 import glob
 import logging
-from typing import List, Union
+from typing import List, Union, Optional
 import re
 import requests.utils
 
 import discord
+from discord import VoiceClient
 from discord.ext import commands
 from discord.ext.commands import Context
 
@@ -40,6 +41,11 @@ class Micspam(commands.Cog):
         self.downloader = audio_utils.Downloader()
         self.config = bot.config
 
+        # Guilds we're currently micspamming
+        # If a guild in here has a pory voice client, then we are okay to disconnect the existing
+        # voice client, since it'd just be interrupting more micspam.
+        self._currently_active_guilds = set()
+
     @staticmethod
     def get_micspam(clip_chosen, song_list):
         try:
@@ -47,9 +53,11 @@ class Micspam(commands.Cog):
         except IndexError:
             return None
 
-    def micspam_after(self, voice_client, err, song_path, song_downloaded=False):
+    def micspam_after(self, voice_client: VoiceClient, err, song_path, song_downloaded=False):
+
         coro = voice_client.disconnect()
         fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+        self._currently_active_guilds.remove(voice_client.guild.id)
 
         if song_downloaded:
             remove(song_path)
@@ -65,10 +73,13 @@ class Micspam(commands.Cog):
             print("Error occured in future")
             print('{0.__class__.__name__}: {0}'.format(e), file=stderr)
 
-    async def _connect_cleanly(self, voice_channel):
+    async def _connect_cleanly(self, voice_channel) -> Optional[VoiceClient]:
         current_connection = voice_channel.guild.voice_client
-        if current_connection:
+        if current_connection and current_connection.guild.id in self._currently_active_guilds:
             await current_connection.disconnect()
+        elif current_connection and current_connection.guild.id not in self._currently_active_guilds:
+            return None
+        self._currently_active_guilds.add(voice_channel.guild.id)
         return await voice_channel.connect()
 
     async def play_micspam(self, channel, clip_chosen, ctx, volume: float = 1.0):
@@ -106,9 +117,13 @@ class Micspam(commands.Cog):
                         pass
                     return
 
+            if not voice_client:
+                await ctx.send("Already connected to voice in the same guild for another cog.")
+                return
+
             if check_urls(str(clip_chosen)):
-                await self.downloader.download_audio_threaded(clip_chosen)
-                stats = await self.downloader.download_stats_threaded(clip_chosen)
+                await self.downloader.download_audio_threaded(clip_chosen, self.bot.loop)
+                stats = await self.downloader.download_stats_threaded(clip_chosen, self.bot.loop)
                 micspam_path = stats["expected_filename"]
                 downloaded = True
             else:
@@ -212,9 +227,19 @@ class Micspam(commands.Cog):
                 await ctx.send("Message too long, trimmed to 300 chars")
             await self.play_micspam(ctx.message.author.voice.channel.id, url, ctx)
 
+    @commands.command(hidden=True)
+    async def up_close(self, ctx, *, message: str):
+        if ctx.message.author.voice is not None:
+            voice_loader = VoiceLoaderAsync()
+            url = await voice_loader.process_text(message[:300], "WillUpClose")
+            if len(message) > 300:
+                await ctx.send("Message too long, trimmed to 300 chars")
+            await self.play_micspam(ctx.message.author.voice.channel.id, url, ctx)
+
     async def kill_voice_connections(self):
         for voice_obj in self.bot.voice_clients:
-            await voice_obj.disconnect(force=True)
+            if voice_obj.channel.guild.id in self._currently_active_guilds:
+                await voice_obj.disconnect(force=True)
 
     async def respond_to_keyword(self, message, allowed_guilds: List[int], response: int):
         if message.guild is not None and message.guild.id in allowed_guilds and \
@@ -226,7 +251,7 @@ class Micspam(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         # TODO FIX THIS NASTY HACK
-        if "owo" in message.content:
+        if " owo " in message.content or message.content == "owo":
             await self.respond_to_keyword(message,
                                           [274731851661443074, 283101596806676481, 401182039421747210, 78716585996455936, 146626123990564864, 392161981261545473, 484966083795746816],
                                           random.choice([2, 11, 20, 23, 30, 36, 40]))
@@ -240,8 +265,8 @@ class Micspam(commands.Cog):
                                           3)
 
     def __unload(self):
-        if self.bot.voice_clients:
-            n = len(self.bot.voice_clients)
+        if self._currently_active_guilds:
+            n = len(self._currently_active_guilds)
             self.bot.loop.create_task(self.kill_voice_connections())
             log.info("Terminated {} voice connection(s) on bot reload.".format(n))
 

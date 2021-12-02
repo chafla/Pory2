@@ -47,6 +47,14 @@ log = logging.getLogger()
 
 T_CacheElem = Tuple[int, dict]
 
+reminder_message_pattern = re.compile("(?:in (.+) to (.+))|(?:to (.+) in (.+))")
+alt_pattern = re.compile("(.*) in (.*)")
+
+help_msg = "You're missing a part, or your message was formatted incorrectly.\n" \
+           "Usage is `[to] <message> in <time period>`, or `in <time period> to <message>\n" \
+           "Time period is defined in terms of seconds, minutes, hours, days, weeks, months, and years.\n" \
+           "For example, 'to eat fruit in 30 minutes', 'to fight the dragon in 2 months 3 weeks 1 day'"
+
 
 class Reminder:
     pattern = re.compile(r"(\d+)\s+((?:second|minute|hour|day|week|month|year))")
@@ -57,13 +65,20 @@ class Reminder:
         if _from_ts:
             return
 
+        message_str, time_str = self.extract_parts(argument)
+
+        if not message_str or not time_str:
+            raise commands.BadArgument(help_msg)
+
+        self.timedelta = None
+
         timeframe = {}
 
         start_ix = 2000
         end_ix = 0
         found_match = False
 
-        for match in re.finditer(self.pattern, argument):
+        for match in re.finditer(self.pattern, time_str):
             found_match = True
             duration, unit = match.groups()
             start_ix = min(match.start(), start_ix)
@@ -96,7 +111,7 @@ class Reminder:
         if self.timedelta.days > (365 * 2):  # max length of 2 years
             raise commands.BadArgument("Length must be less than 2 years.")
 
-        self._reminder_body = self._build_reminder_body(argument, start_ix)
+        self._reminder_body = message_str
 
         # Now let's find the actual message inside
 
@@ -120,9 +135,40 @@ class Reminder:
 
         dt = datetime.datetime.fromtimestamp(float(timestamp))
         new_inst.timedelta = dt - datetime.datetime.now()
-        new_inst._reminder_body = new_inst._build_reminder_body(message)
+        new_inst._reminder_body = message  # TODO It should be stripped by now
 
         return new_inst
+
+    @staticmethod
+    def extract_parts(argument_text: str) -> Tuple[str, str]:
+        """
+        Pull apart the argument into message and text
+        IF the message doesn't start with "to", we'll go backwards
+        :param argument_text:
+        :return: (message, time)
+        """
+
+        message_str = ""
+        time_str = ""
+
+        # "Remind me to x in y"
+        if argument_text.startswith("to") or argument_text.startswith("in"):
+            message_match = re.search(reminder_message_pattern, argument_text)
+            if message_match:
+                if message_match.group(1) and message_match.group(2):
+                    time_str = message_match.group(1)
+                    message_str = message_match.group(2)
+                else:
+                    message_str = message_match.group(3)
+                    time_str = message_match.group(4)
+        else:
+            # "remind me x in y"
+            message_match = re.search(alt_pattern, argument_text)
+            if message_match:
+                message_str = message_match.group(1)
+                time_str = message_match.group(2)
+
+        return message_str, time_str
 
     @staticmethod
     def _build_reminder_body(argument_text: str, starting_ix=None):
@@ -520,15 +566,26 @@ class Reminders(commands.Cog):
 
         return new_rems
 
-    def list_reminders(self, ctx) -> List[str]:
+    async def list_reminders(self, ctx: commands.Context) -> List[str]:
 
         user_rems = self._get_user_reminders(ctx)
         output = []
 
+        dm_channel = ctx.author.dm_channel
+        if dm_channel is None:
+            await ctx.author.create_dm()
+        if ctx.author.dm_channel is not None:
+            dm_channel = ctx.author.dm_channel.id
+
         for reminder_obj, database_obj in user_rems:
-            output.append("<#{}>: **{}** {}".format(database_obj["channel_id"],
-                                                    reminder_obj.message,
-                                                    reminder_obj.human_readable_time()))
+            chan_id = int(database_obj["channel_id"])
+            if dm_channel and chan_id == dm_channel:
+                channel = "<@{}>".format(self.bot.user.id)
+            else:
+                channel = "<#{}>".format(chan_id)
+            output.append("{}: **{}** {}".format(channel,
+                                                 reminder_obj.message,
+                                                 reminder_obj.human_readable_time()))
 
         return output
 
@@ -601,7 +658,7 @@ class Reminders(commands.Cog):
         List a user's reminders
         """
 
-        reminder_msg = "\n".join(self.list_reminders(ctx))
+        reminder_msg = "\n".join(await self.list_reminders(ctx))
 
         if not reminder_msg:
             reminder_msg = "You don't have any active reminders."
@@ -653,7 +710,7 @@ class Reminders(commands.Cog):
         multiple duplicate reminders, make sure we delete the one we want to.
         """
 
-        rem_obj, db_dict = self._select_reminder(ctx)
+        rem_obj, db_dict = await self._select_reminder(ctx)
 
         tag = db_dict["tag"]
 

@@ -1,4 +1,5 @@
 """Music player functionality"""
+from typing import Optional
 
 from .utils import config, checks
 import logging
@@ -17,12 +18,11 @@ class MusicPlayer(commands.Cog):
         self.active_playlists = {}
         self.saved_songs = config.Config("saved_songs.json")
 
-    @staticmethod
-    async def kill_voice_connections(bot):
-        for voice_obj in bot.voice_clients:
-            await voice_obj.disconnect()
+    def kill_voice_connections(self):
+        for active_playlist in self.active_playlists:
+            del active_playlist
 
-    def get_playlist(self, ctx) -> Playlist:
+    def get_playlist(self, ctx) -> Optional[Playlist]:
         """Shorthand for getting the current bound playlist."""
         return self.active_playlists.get(ctx.message.guild.id)
 
@@ -50,9 +50,11 @@ class MusicPlayer(commands.Cog):
         await ctx.send("`Bound to voice channel {0.name}`".format(voice_channel))
         log.info("Bound to voice channel {0.name}".format(voice_channel))
 
-    @mp.command(aliases=["add"])
-    async def queue(self, ctx, *, url: str):
-        """Queue a song to be played, and play it if the playlist is empty."""
+    async def _queue_song(self, ctx: commands.Context, url: str) -> bool:
+        """
+        Queue a song to be played, and play it if the playlist is empty.
+        Returns true if the song was queued successfully, or false otherwise.
+        """
         if self.get_playlist(ctx) is None:
             if ctx.author.voice is not None:
                 # TODO this is repeated above
@@ -61,8 +63,8 @@ class MusicPlayer(commands.Cog):
                 self.active_playlists[ctx.guild.id] = Playlist(self.bot, voice_client, ctx.message.channel)
 
             elif ctx.guild.id not in self.active_playlists.keys():
-                await ctx.send("Not bound to a voice channel. Use `!sc init` to connect me.")
-                return
+                await ctx.send("Not bound to a voice channel. Use `!mp init` to connect me.")
+                return False
 
         playlist = self.get_playlist(ctx)
 
@@ -88,12 +90,65 @@ class MusicPlayer(commands.Cog):
                 playlist.play_song()
                 # TODO NOW PLAYING MESSAGE
             else:
-                await ctx.send("Successfully queued song.")
+                queued_msg = "Successfully queued song."
+                if playlist.loop_count != 0:
+                    queued_msg += "\n\nNote: loop is enabled, the queue will loop on the current song until looping " \
+                                  "is disabled."
+                await ctx.send(queued_msg)
+
+            return True
         except Exception as e:
             traceback.print_exc()
             await ctx.send("Error when adding song: {}".format(type(e)))
+            return False
 
-    @checks.sudo()
+    @mp.command(aliases=["add"])
+    async def queue(self, ctx, *, url: str):
+        await self._queue_song(ctx, url)
+
+    @mp.command()
+    async def loop(self, ctx, loop_count: int = None, *, url: str = None):
+        """Set the current song to loop, or if the current song is looping, stop it from looping"""
+
+        if loop_count is None:
+            loop_count = -1
+
+        playlist = self.get_playlist(ctx)
+        if playlist is None or not playlist.active_song:
+            # There's not a song playing right now
+            # if the user passed in a song, queue it up and loop it
+            # otherwise, let them know we won't track (since we might not have a playlist set up)
+            if not url:
+                await ctx.send("No song is playing right now.\n"
+                               "Either call this command while a song is playing, "
+                               "or call this command with a song URL.")
+                return
+            else:
+                # playlist is initialized within this function
+                song_queued = await self._queue_song(ctx, url)
+                if not song_queued:
+                    return
+
+                playlist = self.get_playlist(ctx)
+
+        elif playlist.loop_count != 0:
+            playlist.loop_count = 0
+            await ctx.send("This song will no longer loop.")
+            return
+
+        playlist.loop_count = loop_count - 1  # Zero counts too
+
+        loop_message = "The current song will be looped"
+
+        if loop_count > 0:
+            loop_message += " {} time{}.".format(loop_count, "s" if loop_count != 1 else "")
+        elif loop_count == 0:
+            loop_message += "...not at all. It'll play once!"
+        else:
+            loop_message += " infinitely."
+        await ctx.send(loop_message)
+
+    @checks.has_manage_guild()
     @mp.command(aliases=["skip"], hidden=True)
     async def next(self, ctx):
         """Skip a currently playing song"""
@@ -104,7 +159,7 @@ class MusicPlayer(commands.Cog):
         #     player.stop()
         await playlist.skip()
 
-    @checks.sudo()
+    @checks.has_manage_guild()
     @mp.command()
     async def shuffle(self, ctx):
         playlist = self.get_playlist(ctx)
@@ -120,7 +175,7 @@ class MusicPlayer(commands.Cog):
         else:
             await ctx.send("The queue is currently empty.")
 
-    @checks.is_pokemon_mod()
+    @checks.has_manage_guild()
     @mp.command(invoke_without_command=True)
     async def kill(self, ctx):
         playlist = self.get_playlist(ctx)
@@ -166,24 +221,22 @@ class MusicPlayer(commands.Cog):
         # TODO: 403 errors are sometimes thrown by ytdl; catch those
 
     def __unload(self):
-        if self.bot.voice_clients:
-            n = len(self.bot.voice_clients)
-            self.bot.loop.create_task(self.kill_voice_connections())
+        if self.active_playlists:
+            n = len(self.active_playlists)
+            self.kill_voice_connections()
             log.info("Terminated {} voice connection(s) on bot reload.".format(n))
-        for playlist in self.active_playlists.values():
-            del playlist
 
 
 def setup(bot):
     bot.add_cog(MusicPlayer(bot))
 
 
-def unload(bot):
-    """
-    Just here as a failsafe
-    """
-    if bot.voice_clients:
-        n = len(bot.voice_clients)
-        bot.loop.create_task(MusicPlayer.kill_voice_connections(bot))
-        log.info("Terminated {} voice connection(s) on bot reload.".format(n))
+# def unload(bot):
+#     """
+#     Just here as a failsafe
+#     """
+#     if bot.voice_clients:
+#         n = len(bot.voice_clients)
+#         bot.loop.create_task(MusicPlayer.kill_voice_connections(bot))
+#         log.info("Terminated {} voice connection(s) on bot reload.".format(n))
 

@@ -1,6 +1,9 @@
 """
 Some utilities for downloading/dealing with audio.
 """
+import asyncio
+from collections import Coroutine
+from typing import Optional
 
 import youtube_dl
 from uuid import uuid4
@@ -26,6 +29,7 @@ base_ytdl_options = {
 
 youtube_dl.utils.bug_reports_message = lambda: ''
 
+
 # TODO: Create a generator for playlist downloads
 
 
@@ -43,24 +47,39 @@ class Downloader:
         return
 
     def download_stats(self, url):
+
         with self.client:
             info = self.client.extract_info(url, download=False)
             info["expected_filename"] = self.client.prepare_filename(info)
             log.info("Extracted info for {}".format(url))
         return info
 
-    async def download_stats_threaded(self, url):
-        future = self.executor.submit(self.download_stats, url)
+    async def download_stats_threaded(self, url, loop) -> dict:
+        future = asyncio.wrap_future(self.executor.submit(self.download_stats, url))
 
         # This should finish once the downloading is done
-        concurrent.futures.wait([future], 30, return_when=concurrent.futures.FIRST_COMPLETED)
-        return future.result()
+        done, fut = await asyncio.wait([future], loop=loop, return_when=asyncio.FIRST_COMPLETED)
+        return await list(done)[0]
 
-    async def download_audio_threaded(self, url):
+    async def download_audio_threaded(self, url, loop) -> str:
+        """Adding an async wrapper around this """
+
+        future = asyncio.wrap_future(self.executor.submit(self.download_audio, url))
+
+        # This should finish once the downloading is done
+        done, fut = await asyncio.wait([future], loop=loop, return_when=asyncio.FIRST_COMPLETED)
+        return await list(done)[0]
+
+    async def download_audio_coro(self, url) -> asyncio.Future:
+        """Adding an async wrapper around this """
+
+        return asyncio.wrap_future(self.download_audio_raw(url))
+
+    def download_audio_raw(self, url) -> concurrent.futures.Future:
         """Adding an async wrapper around this """
 
         download_path = self.executor.submit(self.download_audio, url)
 
         # This should finish once the downloading is done
         # concurrent.futures.wait([download_path], 30, return_when=concurrent.futures.FIRST_COMPLETED)
-        return download_path.result()
+        return download_path

@@ -42,10 +42,11 @@ class Playlist:
 
     def __init__(self, bot, voice_client, bound_text_channel, executor=None):
         """
-        Playlist for dealing with entries for
-        :param bot:
-        :param voice_client:
-        :param bound_text_channel:
+        Playlist for audio clips. Holds onto a queue of songs to be played as well as a historical queue of the ones
+        we've already gone through.
+        :param bot: Bot
+        :param voice_client: Voice client for a given voice channel.
+        :param bound_text_channel: Text channel to send messages in.
         """
         self.bot = bot
         self.voice_client = voice_client
@@ -61,6 +62,10 @@ class Playlist:
         self.live_queue = []
         self._history_queue = []
         self._skipped_last = False
+
+        # amount of times to loop the current track.
+        # if negative, the track will loop forever.
+        self.loop_count = 0
 
     def __len__(self):
         return len(self.live_queue)
@@ -154,7 +159,7 @@ class Playlist:
     async def queue_playlist(self, playlist_info_dict, ctx=None):
         # TODO Consider making this a generator function which just sits in the playlist and yields items
         # Implement this to reduce the initial load time so we don't just kill off pory
-        first_index = 2e1000
+        first_index = 2e32
 
         for i, entry in enumerate(playlist_info_dict["entries"]):
             # The downloaded_url is a little different
@@ -181,6 +186,14 @@ class Playlist:
             traceback.print_exception(type(err), err, err.__traceback__)
             self._send_message("Error occurred during playback: {}".format(err))
 
+        # Check if the song needs to be looped.
+        # If loop count is negative, keep looping ad infinitum
+        if self.loop_count != 0:
+            if self.loop_count > 0:
+                self.loop_count -= 1
+            self.play_song(print_output=False)
+            return
+
         self._history_queue.append(self.active_song)
         try:
             # We need to check to see if the last one was skipped because it seems that sometimes a skip will have
@@ -203,14 +216,16 @@ class Playlist:
             self.active_song = None
             self._send_message("End of queue reached.")
 
-    def play_song(self):
+    def play_song(self, print_output: bool = True):
         # TODO: Give more info
         # We are only guaranteed url, title, id, filename
         audio_source = discord.FFmpegPCMAudio(self.active_song["expected_filename"])
         self.voice_client.play(audio_source, after=lambda err: self.after_song(err))
-        self._send_message("Now playing: {}".format(self._build_track_message(self.active_song)))
+        if print_output:
+            self._send_message("Now playing: {}".format(self._build_track_message(self.active_song)))
 
     async def skip(self):
+        self.loop_count = 0
         self.voice_client.stop()  # automatically calling the after fn
         # self._skipped_last = True
         self._send_message("Skipping.")

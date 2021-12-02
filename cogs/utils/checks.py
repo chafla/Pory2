@@ -13,11 +13,18 @@ T_Check = Callable[[Callable[[Context], bool]], Command]
 
 # More code from robodanny
 
+sudoers = {
+    78716152653553664,
+    125435062127820800
+}
+
+
+def sudo_user_check(user: discord.User) -> bool:
+    return user.id in sudoers
 
 # The original function
 def sudo_check(message: Message) -> bool:
-    return message.author.id == 78716152653553664 or \
-           message.author.id == 125435062127820800
+    return sudo_user_check(message.author)
 
 
 # And the function that works as a decorator
@@ -142,6 +149,26 @@ def can_tag() -> T_Check:
             return True
         else:
             return False
+    return commands.check(predicate)
+
+
+def has_manage_roles() -> T_Check:
+    """Check that the user has the Manage Roles Permission"""
+    def predicate(ctx: Context) -> bool:
+        if isinstance(ctx.channel, discord.DMChannel):
+            return False
+        user_perms = ctx.author.guild_permissions
+        return user_perms.manage_roles
+    return commands.check(predicate)
+
+
+def has_manage_guild() -> T_Check:
+    """Check that the user has the Manage Roles Permission"""
+    def predicate(ctx: Context) -> bool:
+        if isinstance(ctx.channel, discord.DMChannel):
+            return False
+        user_perms = ctx.author.guild_permissions
+        return user_perms.manage_guild or sudo_user_check(ctx.author)
     return commands.check(predicate)
 
 

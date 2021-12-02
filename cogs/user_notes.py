@@ -20,6 +20,7 @@ Note structure:
 
 guild:{id}:mod:notes:track_mod_actions: 0/1 if mod actions are tracked or not
 """
+import asyncio
 from threading import Lock
 from typing import Union, Tuple, List, Dict, Any
 
@@ -176,6 +177,8 @@ class UserNotes(commands.Cog):
             user = user.id
         except AttributeError:
             pass
+
+        note_type = note_type.upper()
 
         if note_type not in SUPPORTED_KEYWORDS:
             raise ValueError("Note type should be one of {}".format(SUPPORTED_KEYWORDS))
@@ -379,15 +382,16 @@ class UserNotes(commands.Cog):
         await ctx.send(embed=embed)
 
     async def get_audit_log_info(self, target_id: int, guild_id: int,
-                                 action: discord.AuditLogAction) -> Tuple[str, str]:
+                                 action: discord.AuditLogAction, limit: int=10) -> Tuple[str, str]:
         """
         Get information from audit logs relating to the last mod action.
         :param target_id: User who the action was performed on.
         :param guild_id: Guild in which the event was triggered
         :param action: Audit log action to look for
+        :param limit: Number of logs to search back through
         :return: (mod responsible, reason)
         """
-        async for log_entry in self.bot.get_guild(guild_id).audit_logs(action=action, limit=10):
+        async for log_entry in self.bot.get_guild(guild_id).audit_logs(action=action, limit=limit):
             if log_entry.target.id == target_id:
                 # Let's stop at the first entry.
                 mod_responsible = log_entry.user
@@ -398,17 +402,42 @@ class UserNotes(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_ban(self, member):
-        if self._kicks_bans_tracked(member.guild):
-            try:
-                # Check audit logs to see if we can glean why the user was banned
-                mod_responsible, reason = await self.get_audit_log_info(member.id, member.guild.id,
-                                                                        discord.AuditLogAction.ban)
-            except discord.Forbidden:  # No audit log perms
-                mod_responsible = self.bot.user.id  # Track an ID anyway since otherwise we might run into issues
-                reason = "(Unknown, missing audit log permissions)"
+        if not self._kicks_bans_tracked(member.guild):
+            return
+        try:
+            # Check audit logs to see if we can glean why the user was banned
+            mod_responsible, reason = await self.get_audit_log_info(member.id, member.guild.id,
+                                                                    discord.AuditLogAction.ban)
+        except discord.Forbidden:  # No audit log perms
+            mod_responsible = self.bot.user.id  # Track an ID anyway since otherwise we might run into issues
+            reason = "(Unknown, missing audit log permissions)"
 
-            self.add_note(mod_responsible, member, member.guild, "ban",
-                          "(auto) Reason: {}".format(reason))
+        self.add_note(mod_responsible, member, member.guild, "BAN",
+                      "(auto) Reason: {}".format(reason))
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member):
+        """
+        Kicks and leaves are indistinguishable events, except that kicks leave an audit log event.
+        Bans also trigger a remove, so we need to make sure we haven't already tracked that.
+        """
+
+        if not self._kicks_bans_tracked(member.guild):
+            return
+
+        # wait a second to let multiple events take place
+        await asyncio.sleep(1)
+
+        try:
+            # Check audit logs to see if we can glean why the user was banned
+            mod_responsible, reason = await self.get_audit_log_info(member.id, member.guild.id,
+                                                                    discord.AuditLogAction.kick, limit=1)
+        except discord.Forbidden:  # No audit log perms
+            mod_responsible = self.bot.user.id  # Track an ID anyway since otherwise we might run into issues
+            reason = "(Unknown, missing audit log permissions)"
+
+        self.add_note(mod_responsible, member, member.guild, "KICK",
+                      "(auto) Reason: {}".format(reason))
 
 
 def setup(bot):

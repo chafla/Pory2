@@ -271,12 +271,13 @@ class ImageListCommands(commands.Cog):
     def get_blacklist(self, cmd_name) -> Set[str]:
         return self.config.smembers("img:{}:blacklist".format(cmd_name))
 
-    async def new_command_func(self, ctx):
+    async def new_command_func(self, cog, ctx):
         await self.process_command(ctx)
 
     def create_new_command(self, name: str):
-        new_cmd = commands.command(name=name, pass_context=True)(self.new_command_func)
-        new_cmd.help_category = self.__class__.__name__
+        new_cmd = commands.Command(self.new_command_func, name=name)
+        # new_cmd = commands.command(name=name, pass_context=True)(self.new_command_func)
+        new_cmd.cog = self
         # new_cmd.cog_name
         self._external_commands.append(new_cmd)
         self.bot.add_command(new_cmd)

@@ -91,6 +91,7 @@ micspam/
 main_3_lounge.py
 cogs/lounge.py
 cogs/eyes.py
+cogs/misc.py
 cogs/zoomeyes.py
 cogs/rpokemon.py
 lood*

@@ -13,7 +13,8 @@ guild
             + names: hashmap associating role titles to IDs
         + roles
             + [role title]: A title referring to a certain role. What !add will reference.
-                + role_id: string user ID
+                + role_id: string role ID
+                + reaction: A dict of {message_id: emoji_id) representing everywhere this role is used with reactions
                 + bans: hashmap of {user_id: unban_time_epoch}. Blacklisted users have a ban time of -1
                 + TODO prereqs: Set of role IDS which must be satisfied for this role to be added.
 
@@ -27,6 +28,7 @@ from discord import Guild, Member
 from discord.ext import commands
 import discord
 import datetime
+import asyncio
 
 from discord.ext.commands import Context
 from math import floor
@@ -42,6 +44,9 @@ class PMs(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = bot.config
+
+        # Quick cache to ensure users don't get reaction roles while using management commands.
+        self._ignore_reactions_from = set()
 
     # TODO create a bot-wide raid mode, disabling role-adding commands
 
@@ -93,44 +98,103 @@ class PMs(commands.Cog):
         except RedisError:
             return None
 
+    def _get_role_reactions(self, guild: Guild, role_title: str):
+        """
+        Get a dict of the active reactions mapped to the role.
+        :param guild: Guild to fetch from
+        :param role_title: Title of the role
+        """
+        try:
+            return self.config.hgetall("guild:{}:roles:roles:{}:reactions".format(guild.id, role_title))
+        except RedisError:
+            return {}
+
+    def _add_role_reaction(self, guild: Guild, role_title: str, message_id, emoji):
+        """
+        Add a new reaction trigger to the database. Will override an existing reaction on the same message.
+        :param guild: Guild to reference
+        :param role_title: Title of the role
+        """
+
+        self.config.hset("guild:{}:roles:roles:{}:reactions".format(guild.id, role_title),
+                         str(message_id), str(emoji))
+
+    def _remove_role_reaction(self, guild: Guild, role_title: str, message_id):
+        """
+        Remove a reaction trigger from a message.
+        """
+
+        self.config.hdel("guild:{}:roles:roles:{}:reactions".format(guild.id, role_title),
+                         message_id)
+
+    def _get_role_title_from_reaction(self, guild: Guild, message_id: int, emoji: discord.PartialEmoji) -> Optional[str]:
+        """
+        Get the role title associated with a reaction on a particular message, or None if there isn't one.
+        :param guild:
+        :return:
+        """
+
+        # Should only be O(n)
+        # - For all tracked roles: (O(n))
+        #   - Check that the message exists (O(1))
+
+        all_roles = self.get_guild_role_names(guild)
+
+        for role in all_roles:
+            rxn = self.config.hget("guild:{}:roles:roles:{}:reactions".format(guild.id, role), message_id)
+            # Only trigger if the emoji from the reaction on the message matches the role
+            if rxn == str(emoji):
+                return role
+
+        else:
+            return None
+
     @staticmethod
     def _format_datetime(dt: datetime.datetime) -> str:
         fmt = "%b %d, %Y %H:%M:%S UTC"
         return dt.strftime(fmt)
 
     @staticmethod
-    async def add_role_from_member(role_id, member: discord.Member, guild):
+    async def add_role_from_member(role_id, member: discord.Member, guild: discord.Guild) -> Optional[str]:
         role = discord.utils.get(guild.roles, id=role_id)
         if role not in member.roles:
             await member.add_roles(role)
-            return True
+            return role.name
         else:
-            return False
+            return None
 
     @staticmethod
-    async def remove_role_from_member(role_id: int, user_id: int, guild: Guild):
-        member = discord.utils.get(guild.members, id=user_id)
+    async def remove_role_from_member(role_id: int, member: discord.Member, guild: Guild) -> Optional[str]:
         role = discord.utils.get(guild.roles, id=role_id)
         # Checking if role in member.roles does not work.
         # Already tried it.
         try:
             await member.remove_roles(role)
-            return True
+            return role.name
         except discord.HTTPException:
-            return False
+            return None
 
-    async def add_role(self, ctx, role_title, guild):
+    async def add_role(self, user: discord.User, role_title: str, guild: discord.Guild,
+                       response_channel: discord.abc.Messageable):
+        """
+        Add a role to a user through a somewhat responsive interface.
 
-        if self.get_guild_config(guild).get("only_pm") and not isinstance(ctx.message.channel, discord.DMChannel):
-            # Don't even respond if the server disallows roles being added in channels.
-            return
-        elif not await self.check_user_verification(ctx.message.author, guild):
-            await ctx.send("You are either under the server verification timer, or you are set to offline/invisible.")
+        :param user: Member
+        :param role_title: Title of the role to add
+        :param guild: Guild the user is in
+        :param response_channel: The channel feedback will be sent to.
+        """
+
+        # Ensure we have the most up-to-date info on the user.
+        member = await guild.fetch_member(user.id)
+
+        if not await self.check_user_verification(member, guild):
+            await response_channel.send(
+                "You are either under the server verification timer, or you are set to offline/invisible."
+            )
             return
 
         prereq_roles = self.get_role_prereqs(guild, role_title)
-
-        member = await guild.fetch_member(ctx.message.author.id)
 
         # Check to see if the author has all of the prereq roles
         required_roles = [i for i in member.roles]
@@ -138,18 +202,18 @@ class PMs(commands.Cog):
         if not set(prereq_roles.keys()).issubset(member_roles):
             required_roles = prereq_roles.difference(member_roles)
             required_roles_str = ", ".join([i.name for i in required_roles if i.id in required_roles])
-            await ctx.send(
+            await response_channel.send(
                 "You are missing the following required roles to add that role: {}".format(required_roles_str)
             )
             return
 
         guild_role_bans = self.get_rolebans(guild, role_title)
 
-        if str(ctx.message.author.id) in guild_role_bans.keys():
+        if str(member.id) in guild_role_bans.keys():
 
-            roleban_ts = int(floor(float(guild_role_bans[str(ctx.message.author.id)])))
+            roleban_ts = int(floor(float(guild_role_bans[str(member.id)])))
             if roleban_ts == -1:
-                await ctx.send("You are currently blacklisted from attaining this role.")
+                await response_channel.send("You are currently blacklisted from attaining this role.")
                 return
             else:
                 # At this point, the roleban TS should just be seconds since epoch
@@ -159,53 +223,49 @@ class PMs(commands.Cog):
 
                 # Ban has expired.
                 if unban_dt > datetime.datetime.utcnow():
-                    await ctx.send("You are temporarily banned from obtaining this role.\n"
-                                   "This ban will expire {}.".format(unban_dt.strftime(fmt)))
+                    await response_channel.send("You are temporarily banned from obtaining this role.\n"
+                                                "This ban will expire {}.".format(unban_dt.strftime(fmt)))
                     return
                 else:
-                    self.config.hdel("guild:{}:roles:roles:{}:bans".format(guild.id, role_title), ctx.message.author.id)
+                    self.config.hdel("guild:{}:roles:roles:{}:bans".format(guild.id, role_title), member.id)
 
         role_id = self._get_role_id_from_title(guild, role_title)
 
         if role_id is None:
-            await ctx.send("Role could not be found.")
+            await response_channel.send("Role could not be found.")
             return
         else:
             role_id = int(role_id)
 
         try:
-            if await self.add_role_from_member(role_id, member, guild):
-                await ctx.send("Successfully added role.")
+            role_name = await self.add_role_from_member(role_id, member, guild)
+            if role_name is not None:
+                await response_channel.send("Successfully added role `{}`".format(role_name))
             else:
-                await ctx.send("You already have this role.")
+                await response_channel.send("You already have this role.")
         except discord.Forbidden:
-            await ctx.send(
+            await response_channel.send(
                 "I'm either missing permissions, or the role you're trying to add is above mine in the list."
             )
 
-    async def remove_role(self, ctx, role_title: str, guild: Guild):
-        if self.get_guild_config(guild).get("only_pm") and not isinstance(ctx.message.channel, discord.DMChannel):
-            # Don't even respond if the server disallows roles being added in channels.
-            return
-
-        # TODO Move this stuff up
-        # elif isinstance(ctx.message.channel, discord.DMChannel):
-        #     guild = self.get_server_from_pm(ctx)
-        # else:
-        #     guild = ctx.guild
+    async def remove_role(self, user: discord.User, role_title: str, guild: Guild,
+                          response_channel: discord.abc.Messageable):
 
         role_id = self._get_role_id_from_title(guild, role_title)
 
+        member = await guild.fetch_member(user.id)
+
         if role_id is None:
-            await ctx.send("Role could not be found.")
+            await response_channel.send("Role could not be found.")
             return
 
-        if await self.remove_role_from_member(int(role_id), ctx.message.author.id, guild):
-            await ctx.send("Successfully removed role.")
+        role_name = await self.remove_role_from_member(int(role_id), member, guild)
+        if role_name is not None:
+            await response_channel.send("Successfully removed role `{}`".format(role_name))
         else:
-            await ctx.send("Role could not be removed.")
+            await response_channel.send("Role could not be removed.")
 
-    @checks.sudo()
+    @checks.has_manage_roles()
     @commands.command(no_pm=True)
     async def register_role(self, ctx, role_name: str, role_title: str, guild_id: int = None):
         """
@@ -244,7 +304,7 @@ class PMs(commands.Cog):
 
     @checks.sudo()
     @commands.command()
-    async def deregister_role(self, ctx, role_title: str, guild_id: int = None):
+    async def unregister_role(self, ctx, role_title: str, guild_id: int = None):
         """
         Remove a role that's been registered by !register_role.
         role_title: title of the role to add, surrounded by "".
@@ -269,7 +329,7 @@ class PMs(commands.Cog):
             await ctx.send("The given role doesn't exist in the specified guild.")
 
     @staticmethod
-    async def check_user_verification(user, guild):
+    async def check_user_verification(user: discord.Member, guild: discord.Guild):
         """
         Check if a user would fall under the verification period
         :param user: User or member object
@@ -313,13 +373,16 @@ class PMs(commands.Cog):
                 return
         else:
             guild = ctx.guild
+            if self.get_guild_config(guild).get("only_pm"):
+                # Don't even respond if the server disallows roles being added in channels.
+                return
 
         if guild == self.r_pkmn_guild:
             await ctx.send("This command has been disabled on Porygon2 for the r/pokemon server. "
                            "Instead, DM Manaphy `+set {}`.".format(role_name))
             return
 
-        await self.add_role(ctx, role_title, guild)
+        await self.add_role(ctx.author, role_title, guild, ctx.channel)
 
     @commands.command()
     async def unset(self, ctx, *, role_name: str):
@@ -328,13 +391,18 @@ class PMs(commands.Cog):
 
         if isinstance(ctx.message.channel, discord.DMChannel):
             guild = await self.get_server_from_pm(ctx)
+
         else:
             guild = ctx.guild
+
+            if self.get_guild_config(guild).get("only_pm"):
+                # Don't even respond if the server disallows roles being added in channels.
+                return
 
         if guild is None:
             return
 
-        await self.remove_role(ctx, role_name, guild)
+        await self.remove_role(ctx.author, role_name, guild, ctx.channel)
 
     async def get_server_from_pm(self, ctx) -> Optional[Guild]:
         # TODO: Work this out
@@ -595,6 +663,164 @@ class PMs(commands.Cog):
                 pass
 
         await ctx.send(embed=embed) if fields_added else await ctx.send("No rolebans active on the server.")
+
+    @checks.has_manage_roles()
+    @commands.command(no_pm=True)
+    async def register_reaction_role(self, ctx, *, role_title: str):
+        """
+        Register a role to be added or removed by reaction to a message.
+        Note that the role title used must have already been registered with `!register_role`
+
+        Command flow:
+        - User calls this command
+        - Bot waits for user to react to a message
+        - Bot tracks any new usages of that reaction on that message
+        - Reactions on that message are then monitored for any usage, and roles are updated if so.
+
+        :param ctx:
+        :param role_title: Registered role title.
+        """
+
+        role_title = role_title.lower()
+
+        # Ensure users don't get roles added while doing this
+        self._ignore_reactions_from.add(ctx.author.id)
+
+        try:
+
+            if not self.role_exists(ctx.guild, role_title):
+                await ctx.send("You must first register this role using `!register_role <full role name> <role title>`")
+                return
+
+            msg = await ctx.send("Please react to a message you wish to associate this role with, using the emoji "
+                                 "that you wish to associate to this role. "
+                                 "Otherwise, click the reaction on this message to exit.")
+
+            # React to our own message allowing users to jump ship
+            await msg.add_reaction("\N{CROSS MARK}")
+
+            def reaction_check(rxn_payload: discord.RawReactionActionEvent):
+                return rxn_payload.member.id == ctx.author.id and rxn_payload.guild_id == ctx.guild.id
+
+            try:
+                payload = await self.bot.wait_for("raw_reaction_add", timeout=600.0, check=reaction_check)
+            except asyncio.TimeoutError:
+                await msg.edit(content="Sorry, your request timed out and has been cancelled.")
+                return
+
+            # If users react to the message with this x emoji, the request is cancelled.
+            if payload.message_id == msg.id and payload.emoji == "\N{CROSS MARK}":
+                await msg.edit(content="Your request has been cancelled.")
+                return
+
+            self._add_role_reaction(ctx.guild, role_title, payload.message_id, payload.emoji)
+
+            chan = self.bot.get_channel(payload.channel_id)
+
+            rxn_msg = await chan.fetch_message(payload.message_id)
+
+            # Add our own reaction so there's no extra reaction, and then remove the user's
+            # TODO Run this before or after?
+
+            await rxn_msg.add_reaction(payload.emoji)
+            await rxn_msg.remove_reaction(payload.emoji, payload.member)
+
+            await ctx.send("Reaction has been registered. To remove it, use `!unregister_reaction_role")
+        finally:
+            self._ignore_reactions_from.remove(ctx.author.id)
+
+    @checks.has_manage_roles()
+    @commands.command(no_pm=True)
+    async def unregister_reaction_role(self, ctx):
+        """
+        Unregister a role that's currently being tracked with reactions.
+        The bot will ask the user to add a reaction to a tracked role, and will
+
+        Command flow:
+        - User calls this command
+        - Bot waits for user to react to a message
+        - Bot tracks any new usages of that reaction on that message
+
+        :param ctx:
+        """
+
+        self._ignore_reactions_from.add(ctx.author.id)
+
+        try:
+
+            # TODO Ensure normal reaction role adds don't get triggered through registering/de-registering process.
+
+            msg = await ctx.send("Please react to the tracked message with the reaction you wish to remove. "
+                                 "If you already have that role added, re-react to it.")
+
+            # React to our own message allowing users to jump ship
+            await msg.add_reaction("\N{CROSS MARK}")
+
+            def reaction_check(rxn_payload: discord.RawReactionActionEvent):
+                return rxn_payload.member.id == ctx.author.id and rxn_payload.guild_id == ctx.guild.id
+
+            try:
+                payload = await self.bot.wait_for("raw_reaction_add", timeout=600.0, check=reaction_check)
+            except asyncio.TimeoutError:
+                await msg.edit(content="Sorry, your request timed out and has been cancelled.")
+                return
+
+            # If users react to the message with this x emoji, the request is cancelled.
+            if payload.message_id == msg.id and str(payload.emoji) == "\N{CROSS MARK}":
+                await msg.edit(content="Your request has been cancelled.")
+                return
+
+            chan = self.bot.get_channel(payload.channel_id)
+
+            reaction_msg = await chan.fetch_message(payload.message_id)
+
+            # Check that the reaction was actually associated with a role
+
+            role_title = self._get_role_title_from_reaction(ctx.guild, reaction_msg.id, payload.emoji)
+
+            if not role_title:
+                await ctx.send("That reaction doesn't appear to be linked to a role.")
+                return
+
+            await reaction_msg.remove_reaction(payload.emoji, payload.member)
+
+            self._remove_role_reaction(ctx.guild, role_title, payload.message_id)
+
+            # Clear the emoji from the message
+            # Note that this doesn't trigger a bunch of reaction removal events
+            await reaction_msg.clear_reaction(payload.emoji)
+
+            await ctx.send("Reaction has been unassociated from the role.")
+
+        finally:
+            self._ignore_reactions_from.remove(ctx.author.id)
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        chan = self.bot.get_channel(payload.channel_id)
+        message = await chan.fetch_message(payload.message_id)
+        member = await message.guild.fetch_member(payload.user_id)
+        self._ignore_reactions_from.add(self.bot.user.id)
+        if isinstance(message.channel, discord.DMChannel) or payload.user_id in self._ignore_reactions_from:
+            return
+        role_title = self._get_role_title_from_reaction(message.guild, message.id, payload.emoji)
+        # Pass it through our normal mechanisms, but make the messages go to the user instead.
+
+        if role_title:
+            await self.add_role(member, role_title, message.guild, member)
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
+        chan = self.bot.get_channel(payload.channel_id)
+
+        message = await chan.fetch_message(payload.message_id)
+        self._ignore_reactions_from.add(self.bot.user.id)
+        member = await message.guild.fetch_member(payload.user_id)
+        if isinstance(message.channel, discord.DMChannel) or payload.user_id in self._ignore_reactions_from:
+            return
+        role_title = self._get_role_title_from_reaction(message.guild, message.id, payload.emoji)
+        if role_title:
+            await self.remove_role(member, role_title, message.guild, member)
 
 
 def setup(bot):

@@ -107,12 +107,7 @@ class Admin(commands.Cog):
         """
         Delete the last pory posted message
         """
-        async for message in ctx.message.channel.history():
-            if n_messages == 0:
-                break
-            if message.author.id == self.bot.user.id:
-                await message.delete()
-                n_messages -= 1
+        await ctx.channel.purge(limit=n_messages, check=lambda m: m.channel.id == ctx.channel.id)
 
     @checks.sudo()
     @commands.command()
